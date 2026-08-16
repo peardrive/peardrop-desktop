@@ -1,0 +1,394 @@
+#!/usr/bin/env node
+/**
+ * MODULE: bin/peardrop
+ * PURPOSE: CLI for P2P file sharing without GUI
+ * COMMANDS:
+ * share <file> - Share file, output link, keep running (Ctrl+C to stop)
+ * download <link> [dir] - Download from link to dir (default: ~/Downloads)
+ * serve - Resume previous shares and keep running (daemon mode)
+ * list (ls) - Show active shares with links
+ * stop [id] - Stop one share or all
+ * status - Show statistics (created, purged, bytes shared)
+ * FUNCTIONS:
+ * cmdShare(filePath) - Create drive, output link, listen for peers
+ * cmdDownload(link, destDir) - Connect to drive, download all files
+ * cmdServe() - Resume previous shares and keep running
+ * cmdList() - List active shares from manager
+ * cmdStop(driveId) - Stop one or all shares
+ * cmdStatus() - Print share statistics
+ * showHelp() - Print usage info
+ * formatBytes(bytes) - "1.2 MB" formatting
+ * EXTERNAL CALLS:
+ * ../lib/hyperdrive-manager.js (manager singleton)
+ * KEY BEHAVIOR:
+ * 'share' command stays running until Ctrl+C (SIGINT)
+ * Outputs machine-parseable "LINK:" and "ID:" lines
+ * Shows real-time peer connections and progress
+ */
+
+const { manager } = require('../lib/hyperdrive-manager');
+const { downloadFromDrive } = require('../lib/downloader');
+const { normalizeUserPath } = require('../lib/file-utils');
+const { EngineError } = require('../lib/engine-errors');
+const path = require('path');
+
+// Format an error for CLI output. Typed engine errors get their category
+// prepended so scripted callers can grep on it; raw errors keep their
+// existing bare-message shape.
+function formatCliError(err) {
+    if (err instanceof EngineError) {
+        return `${err.category}: ${err.message}`;
+    }
+    return err && err.message ? err.message : String(err);
+}
+const fs = require('fs').promises;
+const os = require('os');
+
+const DOWNLOADS_DIR = path.join(os.homedir(), 'Downloads');
+
+// Parse args
+const [,, command, ...args] = process.argv;
+
+async function main() {
+    switch (command) {
+        case 'share':
+            await cmdShare(args[0]);
+            break;
+        case 'download':
+        case 'dl':
+            await cmdDownload(args[0], args[1]);
+            break;
+        case 'serve':
+            await cmdServe();
+            break;
+        case 'list':
+        case 'ls':
+            await cmdList();
+            break;
+        case 'stop':
+            await cmdStop(args[0]);
+            break;
+        case 'status':
+            await cmdStatus();
+            break;
+        default:
+            showHelp();
+    }
+}
+
+async function cmdShare(filePath) {
+    if (!filePath) {
+        console.log('Usage: peardrop share <file|folder>');
+        process.exit(1);
+    }
+
+    let absolutePath;
+    try {
+        absolutePath = normalizeUserPath(filePath);
+    } catch (err) {
+        console.error(`Invalid path: ${err.message}`);
+        process.exit(1);
+    }
+
+    try {
+        await fs.access(absolutePath);
+    } catch {
+        console.error(`File/folder not found: ${absolutePath}`);
+        process.exit(1);
+    }
+    
+    const stats = await fs.stat(absolutePath);
+    const baseName = path.basename(absolutePath);
+    
+    let files = [];
+    let shareName = baseName;
+    let totalSize = 0;
+    
+    if (stats.isDirectory()) {
+        // Recursively collect all files in directory
+        files = await collectFilesRecursive(absolutePath, absolutePath);
+        totalSize = files.reduce((sum, f) => sum + f.size, 0);
+        shareName = baseName;
+        console.log(`Sharing folder: ${baseName} (${files.length} files, ${formatBytes(totalSize)})`);
+    } else {
+        // Single file
+        files = [{
+            name: baseName,
+            path: absolutePath,
+            size: stats.size
+        }];
+        totalSize = stats.size;
+        console.log(`Sharing: ${baseName} (${formatBytes(totalSize)})`);
+    }
+    
+    if (files.length === 0) {
+        console.error('No files found to share');
+        process.exit(1);
+    }
+    
+    await manager.init();
+    
+    const result = await manager.createDrive(files, { name: shareName });
+    
+    // Output just the link on its own line for easy parsing
+    console.log(`\nLINK: ${result.shareLink}`);
+    console.log(`ID: ${result.driveId}`);
+    console.log(`\nSharing... Ctrl+C to stop.`);
+    
+    // Track connections
+    manager.on('peer-connected', (data) => {
+        console.log(`\nPeer connected: ${data.peerId.slice(0, 8)}`);
+    });
+    
+    manager.on('upload-progress', (data) => {
+        process.stdout.write(`\rUploading: ${data.percent}% (${formatBytes(data.bytesTransferred)}/${formatBytes(data.totalBytes)})`);
+    });
+    
+    manager.on('upload-complete', (data) => {
+        console.log(`\nTransfer complete to ${data.peerId.slice(0, 8)}!`);
+    });
+    
+    manager.on('peer-disconnected', (data) => {
+        console.log(`Peer disconnected: ${data.peerId.slice(0, 8)}`);
+    });
+    
+    // Keep alive
+    process.on('SIGINT', async () => {
+        console.log('\nStopping...');
+        await manager.stopAll({ delete: true });
+        process.exit(0);
+    });
+    
+    // Prevent exit
+    await new Promise(() => {});
+}
+
+async function cmdServe() {
+    await manager.init();
+    const status = manager.getStatus();
+    
+    if (status.active.length === 0) {
+        console.log('No active shares to serve.');
+        console.log('Use "peardrop share <file>" to create a share first.');
+        process.exit(0);
+    }
+    
+    console.log(`Serving ${status.active.length} share(s):\n`);
+    for (const share of status.active) {
+        console.log(`  ${share.shareLink}`);
+        console.log(`  Files: ${share.files.map(f => f.name).join(', ')}`);
+        console.log(`  Size: ${formatBytes(share.totalBytes)}\n`);
+    }
+    
+    console.log('Serving... Ctrl+C to stop.\n');
+    
+    // Track connections
+    manager.on('peer-connected', (data) => {
+        console.log(`Peer connected: ${data.peerId.slice(0, 8)} (${data.driveId.slice(0, 16)})`);
+    });
+    
+    manager.on('upload-progress', (data) => {
+        process.stdout.write(`\rUploading: ${data.percent}% (${formatBytes(data.bytesTransferred)}/${formatBytes(data.totalBytes)})`);
+    });
+    
+    manager.on('upload-complete', (data) => {
+        console.log(`\nTransfer complete to ${data.peerId.slice(0, 8)}!`);
+    });
+    
+    manager.on('peer-disconnected', (data) => {
+        console.log(`Peer disconnected: ${data.peerId.slice(0, 8)}`);
+    });
+    
+    // Handle graceful shutdown - stop but don't purge so shares can resume
+    process.on('SIGINT', async () => {
+        console.log('\nStopping server (shares will resume on next serve)...');
+        await manager.stopAll({ delete: false });
+        process.exit(0);
+    });
+    
+    // Prevent exit
+    await new Promise(() => {});
+}
+
+async function cmdDownload(shareLink, destDir) {
+    if (!shareLink) {
+        console.log('Usage: peardrop download <link> [destination]');
+        process.exit(1);
+    }
+    
+    // Clean up link if needed
+    shareLink = shareLink.trim();
+    if (!shareLink.startsWith('peardrop://') && /^[a-f0-9]{64}$/i.test(shareLink)) {
+        shareLink = `peardrop://${shareLink}`;
+    }
+    
+    const downloadPath = destDir ? path.resolve(destDir) : DOWNLOADS_DIR;
+    
+    console.log(`Connecting to: ${shareLink.slice(0, 30)}...`);
+    console.log(`Destination: ${downloadPath}`);
+    
+    await manager.init();
+    
+    try {
+        const result = await manager.openDrive(shareLink);
+        console.log(`\nFound ${result.files.length} file(s):`);
+
+        if (result.truncated) {
+            // Manifest-disagrees-with-itself signal. Post-migration we iterate
+            // the drive listing (uncapped), so the download will pull whatever
+            // the drive actually contains — not the truncated manifest count.
+            // The note tells the user the manifest lied about its own size.
+            console.log(`  (note: manifest listed ${result.truncated.shown} of ${result.truncated.available} files; downloading all files present in the drive)`);
+        }
+
+        for (const file of result.files) {
+            console.log(`  - ${file.name} (${formatBytes(file.size)})`);
+        }
+
+        console.log(`\nDownloading...`);
+
+        await fs.mkdir(downloadPath, { recursive: true });
+
+        // Route through lib/downloader.js — the same streaming path the GUI
+        // uses. Gains for the CLI: safeJoin path-traversal defense, 60 s
+        // stall watchdog, per-file error resilience, folder-level collision
+        // handling via getUniqueFolderPath, and typed engine errors that
+        // formatCliError renders as "category: message".
+        const dl = await downloadFromDrive(result.drive, {
+            destDir: downloadPath,
+            totalBytes: result.totalBytes,
+            shareName: result.shareName,
+        });
+
+        console.log(`\nDone! Files saved to: ${dl.destDir}`);
+        if (dl.failed && dl.failed.length > 0) {
+            console.log(`  (${dl.failed.length} file(s) failed — see [Downloader] Failed messages above)`);
+        }
+
+        await result.close();
+        process.exit(0);
+
+    } catch (error) {
+        console.error(`\nDownload failed: ${formatCliError(error)}`);
+        process.exit(1);
+    }
+}
+
+async function cmdList() {
+    await manager.init();
+    const status = manager.getStatus();
+    
+    if (status.active.length === 0) {
+        console.log('No active shares.');
+        return;
+    }
+    
+    console.log('Active shares:\n');
+    for (const share of status.active) {
+        const files = share.files.map(f => f.name).join(', ');
+        console.log(`  ID: ${share.driveId}`);
+        console.log(`  Link: ${share.shareLink}`);
+        console.log(`  Files: ${files}`);
+        console.log(`  Size: ${formatBytes(share.totalBytes)}`);
+        console.log('');
+    }
+}
+
+async function cmdStop(driveId) {
+    await manager.init();
+    
+    if (driveId) {
+        await manager.stopDrive(driveId, { delete: true });
+        console.log(`Stopped: ${driveId}`);
+    } else {
+        await manager.stopAll({ delete: true });
+        console.log('All shares stopped.');
+    }
+}
+
+async function cmdStatus() {
+    await manager.init();
+    const status = manager.getStatus();
+    
+    console.log('PearDrop Status');
+    console.log('---------------');
+    console.log(`Active shares: ${status.active.length}`);
+    console.log(`Total created: ${status.stats.totalCreated}`);
+    console.log(`Total deleted: ${status.stats.totalPurged}`);
+    console.log(`Bytes shared: ${formatBytes(status.stats.totalBytesShared)}`);
+}
+
+function showHelp() {
+    console.log(`
+PearDrop CLI - P2P File Sharing
+
+Commands:
+  share <file|folder>    Share a file or folder (stays running until Ctrl+C)
+  download <link> [dir]  Download from a peardrop:// link
+  serve                  Resume previous shares and keep running
+  list                   Show active shares
+  stop [id]              Stop a share (or all if no id)
+  status                 Show statistics
+
+Examples:
+  peardrop share ./document.pdf
+  peardrop share ./my-project          (shares entire folder)
+  peardrop download peardrop://abc123...
+  peardrop download peardrop://abc123... ~/Desktop
+  peardrop serve                       (resume shares after restart)
+
+Note: When sharing folders, hidden files (.*), node_modules, and __pycache__ are excluded.
+Shares persist across restarts - use 'serve' to resume or 'stop' to clear.
+`);
+}
+
+function formatBytes(bytes) {
+    if (!bytes || bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+/**
+ * Recursively collect all files in a directory
+ * @param {string} dirPath - Current directory to scan
+ * @param {string} basePath - Root directory (for computing relative paths)
+ * @returns {Promise<Array<{name, path, size, relativePath}>>}
+ */
+async function collectFilesRecursive(dirPath, basePath) {
+    const files = [];
+    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    
+    for (const entry of entries) {
+        const fullPath = path.join(dirPath, entry.name);
+        
+        // Skip hidden files and common excludes
+        if (entry.name.startsWith('.')) continue;
+        if (entry.name === 'node_modules') continue;
+        if (entry.name === '__pycache__') continue;
+        
+        if (entry.isDirectory()) {
+            // Recurse into subdirectory
+            const subFiles = await collectFilesRecursive(fullPath, basePath);
+            files.push(...subFiles);
+        } else if (entry.isFile()) {
+            const stats = await fs.stat(fullPath);
+            // Compute relative path from base (preserves folder structure)
+            const relativePath = path.relative(basePath, fullPath);
+            files.push({
+                name: entry.name,
+                path: fullPath,
+                size: stats.size,
+                relativePath: relativePath
+            });
+        }
+    }
+    
+    return files;
+}
+
+main().catch(err => {
+    console.error('Error:', formatCliError(err));
+    process.exit(1);
+});

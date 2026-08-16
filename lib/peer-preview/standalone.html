@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PeerPreview — Test Harness</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+      background: #1a1a1a;
+      color: #e0e0e0;
+      margin: 0;
+      padding: 40px;
+      min-height: 100vh;
+    }
+
+    h1 {
+      font-size: 24px;
+      font-weight: 600;
+      margin: 0 0 8px;
+      color: #fff;
+    }
+
+    .subtitle {
+      color: #888;
+      font-size: 14px;
+      margin-bottom: 32px;
+    }
+
+    .section {
+      margin-bottom: 40px;
+    }
+
+    .section h2 {
+      font-size: 16px;
+      font-weight: 500;
+      color: #aaa;
+      margin: 0 0 16px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      background: #2a2a2a;
+      border-radius: 8px;
+      padding: 16px;
+      cursor: pointer;
+      transition: background 0.15s ease, transform 0.1s ease;
+      border: 1px solid #333;
+    }
+
+    .card:hover {
+      background: #333;
+      transform: translateY(-2px);
+    }
+
+    .card-icon {
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+
+    .card-title {
+      font-weight: 500;
+      color: #fff;
+      margin-bottom: 4px;
+    }
+
+    .card-meta {
+      font-size: 12px;
+      color: #666;
+    }
+
+    /* Custom URL input */
+    .custom-section {
+      background: #222;
+      border-radius: 8px;
+      padding: 20px;
+      border: 1px solid #333;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .input-row input {
+      flex: 1;
+      background: #1a1a1a;
+      border: 1px solid #444;
+      border-radius: 6px;
+      padding: 10px 14px;
+      color: #fff;
+      font-size: 14px;
+    }
+
+    .input-row input:focus {
+      outline: none;
+      border-color: #0a84ff;
+    }
+
+    .input-row input::placeholder {
+      color: #555;
+    }
+
+    .btn {
+      background: #0a84ff;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 10px 20px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+
+    .btn:hover {
+      background: #0070e0;
+    }
+
+    .btn-secondary {
+      background: #444;
+    }
+
+    .btn-secondary:hover {
+      background: #555;
+    }
+
+    /* Log area */
+    .log {
+      background: #111;
+      border-radius: 6px;
+      padding: 16px;
+      font-family: "SF Mono", Monaco, monospace;
+      font-size: 12px;
+      max-height: 200px;
+      overflow-y: auto;
+      margin-top: 24px;
+      border: 1px solid #333;
+    }
+
+    .log-entry {
+      margin-bottom: 4px;
+      color: #888;
+    }
+
+    .log-entry .event {
+      color: #4af;
+    }
+
+    .log-entry .data {
+      color: #6c6;
+    }
+
+    /* Video player test */
+    .player-test {
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+      max-width: 640px;
+      margin-bottom: 24px;
+    }
+
+    .player-test-container {
+      aspect-ratio: 16 / 9;
+    }
+
+    .note {
+      background: #2a2a2a;
+      border-left: 3px solid #0a84ff;
+      padding: 12px 16px;
+      font-size: 13px;
+      color: #aaa;
+      margin-top: 24px;
+      border-radius: 0 6px 6px 0;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>PeerPreview</h1>
+  <p class="subtitle">QuickTime-inspired media previewer for PearDrive</p>
+
+  <!-- Sample Media -->
+  <div class="section">
+    <h2>Sample Media</h2>
+    <div class="grid">
+      <div class="card" onclick="previewSample('video')">
+        <div class="card-icon">🎬</div>
+        <div class="card-title">Big Buck Bunny</div>
+        <div class="card-meta">Sample video • MP4</div>
+      </div>
+      <div class="card" onclick="previewSample('image')">
+        <div class="card-icon">🖼️</div>
+        <div class="card-title">Sample Image</div>
+        <div class="card-meta">Unsplash photo • JPG</div>
+      </div>
+      <div class="card" onclick="previewSample('audio')">
+        <div class="card-icon">🎵</div>
+        <div class="card-title">Sample Audio</div>
+        <div class="card-meta">Test tone • MP3</div>
+      </div>
+      <div class="card" onclick="previewSample('gif')">
+        <div class="card-icon">✨</div>
+        <div class="card-title">Animated GIF</div>
+        <div class="card-meta">Animation test • GIF</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Custom URL -->
+  <div class="section">
+    <h2>Custom URL</h2>
+    <div class="custom-section">
+      <div class="input-row">
+        <input type="text" id="customUrl" placeholder="Enter media URL (video, image, or audio)...">
+        <button class="btn" onclick="previewCustom()">Preview</button>
+      </div>
+      <div class="input-row">
+        <input type="text" id="customFilename" placeholder="Filename (optional)">
+        <input type="number" id="customSize" placeholder="Size in bytes (optional)">
+      </div>
+    </div>
+  </div>
+
+  <!-- Standalone Video Player Test -->
+  <div class="section">
+    <h2>Standalone VideoPlayer Component</h2>
+    <div class="player-test">
+      <div id="videoPlayerTest" class="player-test-container"></div>
+    </div>
+    <div style="display: flex; gap: 8px;">
+      <button class="btn btn-secondary" onclick="testPlayer.play()">Play</button>
+      <button class="btn btn-secondary" onclick="testPlayer.pause()">Pause</button>
+      <button class="btn btn-secondary" onclick="testPlayer.seek(30)">Seek 30s</button>
+      <button class="btn btn-secondary" onclick="testPlayer.setVolume(0.5)">50% Volume</button>
+    </div>
+  </div>
+
+  <!-- Event Log -->
+  <div class="section">
+    <h2>Event Log</h2>
+    <div class="log" id="eventLog">
+      <div class="log-entry"><span class="event">ready</span> — PeerPreview initialized</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Keyboard shortcuts:</strong> 
+    Space/K = Play/Pause • 
+    F = Fullscreen • 
+    M = Mute • 
+    ← → = Seek 10s • 
+    ↑ ↓ = Volume • 
+    Esc = Close
+  </div>
+
+  <!-- Load components -->
+  <script src="video-player.js"></script>
+  <script src="preview-overlay.js"></script>
+  <script src="peer-preview.js"></script>
+
+  <script>
+    // Initialize PeerPreview
+    const preview = new PeerPreview();
+    let testPlayer;
+
+    // Sample media URLs
+    const samples = {
+      video: {
+        url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+        filename: 'BigBuckBunny.mp4',
+        size: 158008374
+      },
+      image: {
+        url: 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=1920',
+        filename: 'mountain-landscape.jpg',
+        size: 2048000
+      },
+      audio: {
+        url: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
+        filename: 'SoundHelix-Song-1.mp3',
+        size: 8256000
+      },
+      gif: {
+        url: 'https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif',
+        filename: 'cat-typing.gif',
+        size: 1024000
+      }
+    };
+
+    function previewSample(type) {
+      const sample = samples[type];
+      if (sample) {
+        preview.open(sample);
+        log('open', `Opening ${sample.filename}`);
+      }
+    }
+
+    function previewCustom() {
+      const url = document.getElementById('customUrl').value.trim();
+      if (!url) {
+        log('error', 'Please enter a URL');
+        return;
+      }
+
+      const filename = document.getElementById('customFilename').value.trim() || undefined;
+      const size = parseInt(document.getElementById('customSize').value) || undefined;
+
+      preview.open({ url, filename, size });
+      log('open', `Opening custom URL: ${url}`);
+    }
+
+    // Event logging
+    function log(event, data) {
+      const logEl = document.getElementById('eventLog');
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.innerHTML = `<span class="event">${event}</span> — <span class="data">${
+        typeof data === 'object' ? JSON.stringify(data) : data
+      }</span>`;
+      logEl.appendChild(entry);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    // Listen to preview events
+    ['open', 'close', 'play', 'pause', 'ended', 'error', 'buffer-low', 'buffer-ok', 'quality-change'].forEach(evt => {
+      preview.on(evt, (data) => log(evt, data));
+    });
+
+    // Initialize standalone video player
+    document.addEventListener('DOMContentLoaded', () => {
+      testPlayer = new VideoPlayer('#videoPlayerTest');
+      testPlayer.load(samples.video.url);
+      
+      testPlayer.on('play', () => log('player:play', 'Standalone player playing'));
+      testPlayer.on('pause', () => log('player:pause', 'Standalone player paused'));
+    });
+
+    // Handle Enter key in URL input
+    document.getElementById('customUrl').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') previewCustom();
+    });
+  </script>
+
+</body>
+</html>

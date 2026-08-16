@@ -1,0 +1,1140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>ScrollList - Standalone Test</title>
+  <style>
+    /* Reset and base */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      background: #1a1a1a;
+      color: #e0e0e0;
+    }
+
+    /* App container */
+    .app {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      max-width: 400px;
+      margin: 0 auto;
+      background: #242424;
+    }
+
+    /* Header */
+    .header {
+      padding: 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+
+    .header h1 {
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .header .count {
+      font-size: 13px;
+      opacity: 0.5;
+    }
+
+    /* Menu button */
+    .menu-container {
+      position: relative;
+    }
+
+    .menu-button {
+      width: 32px;
+      height: 32px;
+      border: none;
+      background: transparent;
+      border-radius: 6px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #e0e0e0;
+      transition: background 0.15s;
+    }
+
+    .menu-button:hover {
+      background: rgba(255,255,255,0.1);
+    }
+
+    .menu-button:active {
+      background: rgba(255,255,255,0.15);
+    }
+
+    .menu-dots {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .menu-dots span {
+      width: 4px;
+      height: 4px;
+      background: currentColor;
+      border-radius: 50%;
+    }
+
+    /* Menu button active state during reorder mode */
+    @keyframes dot-wiggle-outer {
+      0%, 100% { transform: translateX(-0.7px); }
+      50% { transform: translateX(0.7px); }
+    }
+
+    @keyframes dot-wiggle-middle {
+      0%, 100% { transform: translateX(0.7px); }
+      50% { transform: translateX(-0.7px); }
+    }
+
+    @keyframes brightness-pulse {
+      0%, 100% { opacity: 0.9; }
+      50% { opacity: 1.0; }
+    }
+
+    .menu-button.reorder-active {
+      background: rgba(255, 255, 255, 0.25);
+      animation: brightness-pulse 2s ease-in-out infinite;
+    }
+
+    .menu-button.reorder-active:hover {
+      background: rgba(255, 255, 255, 0.35);
+    }
+
+    .menu-button.reorder-active .menu-dots span {
+      background: rgba(255, 255, 255, 0.95);
+    }
+
+    /* Top and bottom go one way, middle goes opposite */
+    .menu-button.reorder-active .menu-dots span:nth-child(1) {
+      animation: dot-wiggle-outer 0.5s ease-in-out infinite;
+    }
+    .menu-button.reorder-active .menu-dots span:nth-child(2) {
+      animation: dot-wiggle-middle 0.5s ease-in-out infinite;
+    }
+    .menu-button.reorder-active .menu-dots span:nth-child(3) {
+      animation: dot-wiggle-outer 0.5s ease-in-out infinite;
+      animation-delay: -0.08s;
+    }
+
+    /* Dropdown menu */
+    .menu-dropdown {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 4px;
+      min-width: 180px;
+      background: #333;
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+      overflow: hidden;
+      opacity: 0;
+      visibility: hidden;
+      transform: translateY(-8px) scale(0.95);
+      transform-origin: top right;
+      transition: opacity 0.15s, transform 0.15s, visibility 0.15s;
+      z-index: 100;
+    }
+
+    .menu-dropdown.open {
+      opacity: 1;
+      visibility: visible;
+      transform: translateY(0) scale(1);
+    }
+
+    .menu-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      padding: 12px 16px;
+      border: none;
+      background: transparent;
+      color: #e0e0e0;
+      font-size: 14px;
+      text-align: left;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+
+    .menu-item:hover {
+      background: rgba(255,255,255,0.1);
+    }
+
+    .menu-item:active {
+      background: rgba(255,255,255,0.15);
+    }
+
+    .menu-item-icon {
+      width: 18px;
+      text-align: center;
+      opacity: 0.7;
+    }
+
+    .menu-divider {
+      height: 1px;
+      background: rgba(255,255,255,0.1);
+      margin: 4px 0;
+    }
+
+    /* Backdrop for closing menu */
+    .menu-backdrop {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 99;
+      display: none;
+    }
+
+    .menu-backdrop.active {
+      display: block;
+    }
+
+    /* List container */
+    .list-container {
+      flex: 1;
+      min-height: 0;
+    }
+
+    /* Dark scrollbar styling */
+    .scroll-list::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .scroll-list::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 4px;
+    }
+
+    .scroll-list::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 4px;
+    }
+
+    .scroll-list::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+
+    /* Firefox scrollbar */
+    .scroll-list {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.15) rgba(255, 255, 255, 0.05);
+    }
+
+    /* Status bar */
+    .status {
+      padding: 12px 16px;
+      border-top: 1px solid rgba(255,255,255,0.1);
+      font-size: 12px;
+      opacity: 0.6;
+    }
+
+    /* Custom item styling - macOS-inspired cards */
+    .scroll-list-item {
+      margin: 6px 12px;
+      padding: 12px 14px;
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 
+        0 1px 2px rgba(0, 0, 0, 0.2),
+        0 2px 4px rgba(0, 0, 0, 0.1),
+        inset 0 1px 0 rgba(255, 255, 255, 0.05);
+      transition: 
+        transform 0.2s ease,
+        box-shadow 0.2s ease,
+        margin 0.2s ease,
+        background 0.15s ease;
+    }
+
+    .scroll-list-item:hover {
+      background: rgba(255, 255, 255, 0.09);
+    }
+
+    .scroll-list-item:active {
+      background: rgba(255, 255, 255, 0.12);
+    }
+
+    .drive-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .drive-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 6px;
+      background: linear-gradient(135deg, #4a9eff, #7c3aed);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+
+    .drive-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .drive-name {
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .drive-meta {
+      font-size: 12px;
+      opacity: 0.6;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .drive-status {
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 500;
+      text-transform: uppercase;
+    }
+
+    .drive-status.active {
+      background: rgba(34, 197, 94, 0.2);
+      color: #22c55e;
+    }
+
+    .drive-status.paused {
+      background: rgba(234, 179, 8, 0.2);
+      color: #eab308;
+    }
+
+    .drive-status.local {
+      background: rgba(59, 130, 246, 0.2);
+      color: #3b82f6;
+    }
+
+    /* Reorder mode - lifted, wiggling items */
+    @keyframes wiggle-rotate {
+      0%, 100% { transform: rotate(-0.5deg); }
+      50% { transform: rotate(0.5deg); }
+    }
+
+    @keyframes wiggle-shift {
+      0%, 100% { margin-left: 11px; margin-right: 13px; }
+      50% { margin-left: 13px; margin-right: 11px; }
+    }
+
+    .reorder-mode .scroll-list-item {
+      cursor: grab;
+      margin-top: 10px;
+      margin-bottom: 10px;
+      box-shadow: 
+        0 4px 8px rgba(0, 0, 0, 0.3),
+        0 8px 16px rgba(0, 0, 0, 0.2),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      animation: 
+        wiggle-rotate 0.375s ease-in-out infinite,
+        wiggle-shift 0.5s ease-in-out infinite;
+    }
+
+    /* Stagger the animations to feel random */
+    .reorder-mode .scroll-list-item:nth-child(2n) {
+      animation-delay: -0.1s, -0.15s;
+    }
+
+    .reorder-mode .scroll-list-item:nth-child(3n) {
+      animation-delay: -0.22s, -0.33s;
+    }
+
+    .reorder-mode .scroll-list-item:nth-child(4n) {
+      animation-delay: -0.07s, -0.4s;
+    }
+
+    .reorder-mode .scroll-list-item:nth-child(5n) {
+      animation-delay: -0.3s, -0.08s;
+    }
+
+    .reorder-mode .scroll-list-item:hover {
+      box-shadow: 
+        0 6px 12px rgba(0, 0, 0, 0.35),
+        0 12px 24px rgba(0, 0, 0, 0.25),
+        inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    }
+
+    .reorder-mode .scroll-list-item:active {
+      cursor: grabbing;
+      animation: none;
+      transform: scale(1.02);
+      box-shadow: 
+        0 8px 16px rgba(0, 0, 0, 0.4),
+        0 16px 32px rgba(0, 0, 0, 0.3),
+        inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    }
+
+    .reorder-mode .scroll-list-item.dragging {
+      opacity: 0.6;
+      animation: none;
+      transform: scale(1.02) rotate(2deg);
+      background: rgba(74, 158, 255, 0.15);
+    }
+
+    /* Drop indicator line between items */
+    .drop-indicator {
+      position: relative;
+      height: 4px;
+      margin: 6px 12px;
+      background: #4a9eff;
+      border-radius: 2px;
+      box-shadow: 
+        0 0 8px rgba(74, 158, 255, 0.6),
+        0 0 16px rgba(74, 158, 255, 0.4);
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    /* Extra space around the indicator */
+    .reorder-mode .scroll-list-item.gap-above {
+      margin-top: 18px;
+    }
+
+    .reorder-mode .scroll-list-item.gap-below {
+      margin-bottom: 18px;
+    }
+
+    /* First item gap-above needs extra space so indicator isn't cut off */
+    .reorder-mode .scroll-list-item:first-child.gap-above {
+      margin-top: 24px;
+    }
+
+    /* Top padding on the scroll list when indicator is at very top */
+    .reorder-mode .scroll-list.indicator-at-top {
+      padding-top: 8px;
+    }
+
+    /* Light mode */
+    body.light-mode {
+      background: #f0f0f0;
+      color: #333;
+    }
+
+    body.light-mode .app {
+      background: #f5f5f5;
+    }
+
+    body.light-mode .header,
+    body.light-mode .status {
+      border-color: rgba(0,0,0,0.08);
+    }
+
+    body.light-mode .menu-button {
+      color: #333;
+    }
+
+    body.light-mode .menu-dropdown {
+      background: #fff;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+    }
+
+    body.light-mode .menu-item {
+      color: #333;
+    }
+
+    body.light-mode .menu-item:hover {
+      background: rgba(0,0,0,0.05);
+    }
+
+    body.light-mode .menu-divider {
+      background: rgba(0,0,0,0.1);
+    }
+
+    /* Light mode: reorder-active button */
+    body.light-mode .menu-button.reorder-active {
+      background: rgba(0, 0, 0, 0.12);
+    }
+
+    body.light-mode .menu-button.reorder-active:hover {
+      background: rgba(0, 0, 0, 0.18);
+    }
+
+    body.light-mode .menu-button.reorder-active .menu-dots span {
+      background: rgba(0, 0, 0, 0.85);
+    }
+
+    /* Light mode scrollbar */
+    body.light-mode .scroll-list::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.05);
+    }
+
+    body.light-mode .scroll-list::-webkit-scrollbar-thumb {
+      background: rgba(0, 0, 0, 0.15);
+    }
+
+    body.light-mode .scroll-list::-webkit-scrollbar-thumb:hover {
+      background: rgba(0, 0, 0, 0.25);
+    }
+
+    body.light-mode .scroll-list {
+      scrollbar-color: rgba(0, 0, 0, 0.15) rgba(0, 0, 0, 0.05);
+    }
+
+    /* Light mode cards */
+    body.light-mode .scroll-list-item {
+      background: rgba(255, 255, 255, 0.8);
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      box-shadow: 
+        0 1px 2px rgba(0, 0, 0, 0.08),
+        0 2px 4px rgba(0, 0, 0, 0.05),
+        inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    }
+
+    body.light-mode .scroll-list-item:hover {
+      background: rgba(255, 255, 255, 0.95);
+    }
+
+    body.light-mode .scroll-list-item:active {
+      background: rgba(255, 255, 255, 1);
+    }
+
+    body.light-mode .reorder-mode .scroll-list-item {
+      box-shadow: 
+        0 4px 8px rgba(0, 0, 0, 0.12),
+        0 8px 16px rgba(0, 0, 0, 0.08),
+        inset 0 1px 0 rgba(255, 255, 255, 0.9);
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="header-left">
+        <h1>Drives</h1>
+        <span class="count" id="count">0</span>
+      </div>
+
+      <div class="menu-container">
+        <button class="menu-button" id="menu-button" aria-label="Menu">
+          <div class="menu-dots">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        </button>
+        <div class="menu-dropdown" id="menu-dropdown">
+          <!-- Menu items populated by MenuManager -->
+        </div>
+      </div>
+      <div class="menu-backdrop" id="menu-backdrop"></div>
+    </header>
+
+    <div class="list-container" id="list-container"></div>
+
+    <footer class="status" id="status">Ready</footer>
+  </div>
+
+  <script src="scroll-list.js"></script>
+  <script>
+    /**
+     * MenuManager - Simple dropdown menu system
+     * 
+     * @module MenuManager
+     * 
+     * USAGE:
+     *   const menu = new MenuManager('#menu-button', '#menu-dropdown', '#menu-backdrop');
+     *   menu.addItem({ id: 'reorder', label: 'Reorder', icon: '↕️', action: () => {} });
+     *   menu.addDivider();
+     *   menu.addItem({ id: 'theme', label: 'Dark Mode', icon: '🌙', action: () => {} });
+     */
+    class MenuManager {
+      constructor(buttonSelector, dropdownSelector, backdropSelector) {
+        this.button = document.querySelector(buttonSelector);
+        this.dropdown = document.querySelector(dropdownSelector);
+        this.backdrop = document.querySelector(backdropSelector);
+        this.items = [];
+        this.isOpen = false;
+
+        this._bindEvents();
+      }
+
+      _bindEvents() {
+        this.button.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.toggle();
+        });
+
+        this.backdrop.addEventListener('click', () => {
+          this.close();
+        });
+
+        // Close on escape
+        document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape' && this.isOpen) {
+            this.close();
+          }
+        });
+      }
+
+      /**
+       * Add a menu item
+       * @param {Object} item
+       * @param {string} item.id - Unique identifier
+       * @param {string} item.label - Display text
+       * @param {string} item.icon - Emoji or icon character
+       * @param {Function} item.action - Click handler
+       * @param {boolean} item.toggle - If true, shows checkmark when active
+       * @param {Function} item.isActive - Returns boolean for toggle state
+       */
+      addItem(item) {
+        this.items.push({ type: 'item', ...item });
+        this._render();
+        return this;
+      }
+
+      /**
+       * Add a divider line
+       */
+      addDivider() {
+        this.items.push({ type: 'divider' });
+        this._render();
+        return this;
+      }
+
+      /**
+       * Remove item by id
+       */
+      removeItem(id) {
+        this.items = this.items.filter(item => item.id !== id);
+        this._render();
+        return this;
+      }
+
+      /**
+       * Update item by id
+       */
+      updateItem(id, updates) {
+        const item = this.items.find(item => item.id === id);
+        if (item) {
+          Object.assign(item, updates);
+          this._render();
+        }
+        return this;
+      }
+
+      _render() {
+        this.dropdown.innerHTML = this.items.map(item => {
+          if (item.type === 'divider') {
+            return '<div class="menu-divider"></div>';
+          }
+
+          const isActive = item.isActive ? item.isActive() : false;
+          const checkmark = item.toggle && isActive ? '✓ ' : '';
+          
+          return `
+            <button class="menu-item" data-id="${item.id}">
+              <span class="menu-item-icon">${item.icon || ''}</span>
+              <span>${checkmark}${item.label}</span>
+            </button>
+          `;
+        }).join('');
+
+        // Bind click handlers
+        this.dropdown.querySelectorAll('.menu-item').forEach(el => {
+          el.addEventListener('click', () => {
+            const item = this.items.find(i => i.id === el.dataset.id);
+            if (item && item.action) {
+              item.action();
+              // Re-render for toggle items
+              if (item.toggle) {
+                this._render();
+              }
+            }
+            this.close();
+          });
+        });
+      }
+
+      toggle() {
+        this.isOpen ? this.close() : this.open();
+      }
+
+      open() {
+        this.isOpen = true;
+        this.dropdown.classList.add('open');
+        this.backdrop.classList.add('active');
+        // Re-render to update toggle states
+        this._render();
+      }
+
+      close() {
+        this.isOpen = false;
+        this.dropdown.classList.remove('open');
+        this.backdrop.classList.remove('active');
+      }
+    }
+
+    // ==================== INITIALIZATION ====================
+    
+    const container = document.getElementById('list-container');
+    const countEl = document.getElementById('count');
+    const statusEl = document.getElementById('status');
+
+    // State
+    let reorderMode = false;
+
+    // Custom render function for drives
+    function renderDrive(drive, index) {
+      const icon = drive.type === 'download' ? '⬇️' : '📤';
+      const name = drive.name || drive.driveId?.slice(0, 12) || `Drive ${index + 1}`;
+      const size = formatBytes(drive.totalBytes || 0);
+      const files = drive.fileCount || 0;
+      const status = drive.status || 'active';
+      
+      return `
+        <div class="scroll-list-item" data-index="${index}" data-id="${drive.driveId}" draggable="${reorderMode}">
+          <div class="drive-item">
+            <div class="drive-icon">${icon}</div>
+            <div class="drive-info">
+              <div class="drive-name">${escapeHtml(name)}</div>
+              <div class="drive-meta">${files} file${files !== 1 ? 's' : ''} • ${size}</div>
+            </div>
+            <span class="drive-status ${status}">${status}</span>
+          </div>
+        </div>
+      `;
+    }
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+    function escapeHtml(text) {
+      if (text == null) return '';
+      const div = document.createElement('div');
+      div.textContent = String(text);
+      return div.innerHTML;
+    }
+
+    // Initialize ScrollList
+    const list = new ScrollList(container, {
+      renderItem: renderDrive,
+      emptyMessage: 'No drives yet',
+      keyField: 'driveId',
+      onItemClick: (item, index) => {
+        if (reorderMode) return; // Ignore clicks in reorder mode
+        statusEl.textContent = `Selected: ${item.name || item.driveId}`;
+        console.log('Item clicked:', item);
+      }
+    });
+
+    // Update count on changes
+    list.on('update', (data) => {
+      countEl.textContent = data.count;
+    });
+
+    list.on('empty', () => {
+      countEl.textContent = '0';
+    });
+
+    // ==================== MENU SETUP ====================
+
+    const menu = new MenuManager('#menu-button', '#menu-dropdown', '#menu-backdrop');
+    const menuButton = document.getElementById('menu-button');
+
+    // Function to toggle reorder mode
+    function toggleReorderMode() {
+      reorderMode = !reorderMode;
+      container.classList.toggle('reorder-mode', reorderMode);
+      menuButton.classList.toggle('reorder-active', reorderMode);
+      list.refresh();
+      statusEl.textContent = reorderMode ? 'Drag items to reorder' : 'Reorder mode off';
+      
+      if (reorderMode) {
+        enableDragAndDrop();
+      } else {
+        disableDragAndDrop();
+      }
+    }
+
+    // Override menu button click to handle reorder mode toggle
+    menuButton.addEventListener('click', (e) => {
+      if (reorderMode) {
+        // In reorder mode, clicking the button turns it off (don't open menu)
+        e.stopImmediatePropagation();
+        toggleReorderMode();
+        return;
+      }
+      // Otherwise, let the MenuManager handle it (open menu)
+    }, true); // Use capture to run before MenuManager's handler
+
+    // Reorder option
+    menu.addItem({
+      id: 'reorder',
+      label: 'Reorder',
+      icon: '↕️',
+      toggle: true,
+      isActive: () => reorderMode,
+      action: () => {
+        toggleReorderMode();
+      }
+    });
+
+    menu.addDivider();
+
+    // Theme toggle
+    menu.addItem({
+      id: 'theme',
+      label: 'Light Mode',
+      icon: '☀️',
+      toggle: true,
+      isActive: () => document.body.classList.contains('light-mode'),
+      action: () => {
+        document.body.classList.toggle('light-mode');
+        const isLight = document.body.classList.contains('light-mode');
+        menu.updateItem('theme', { 
+          label: isLight ? 'Dark Mode' : 'Light Mode',
+          icon: isLight ? '🌙' : '☀️'
+        });
+        statusEl.textContent = isLight ? 'Light mode' : 'Dark mode';
+      }
+    });
+
+    menu.addDivider();
+
+    // Load drives
+    menu.addItem({
+      id: 'load',
+      label: 'Load Drives',
+      icon: '📂',
+      action: loadDrives
+    });
+
+    // Add test item
+    let itemCounter = 0;
+    menu.addItem({
+      id: 'add',
+      label: 'Add Test Item',
+      icon: '➕',
+      action: () => {
+        itemCounter++;
+        list.addItem({
+          driveId: `drive_test_${Date.now()}_${itemCounter}`,
+          name: `Test Drive ${itemCounter}`,
+          type: Math.random() > 0.5 ? 'upload' : 'download',
+          status: ['active', 'paused', 'local'][Math.floor(Math.random() * 3)],
+          totalBytes: Math.floor(Math.random() * 1024 * 1024 * 100),
+          fileCount: Math.floor(Math.random() * 10) + 1
+        });
+        statusEl.textContent = `Added item ${itemCounter}`;
+      }
+    });
+
+    // Clear all
+    menu.addItem({
+      id: 'clear',
+      label: 'Clear All',
+      icon: '🗑️',
+      action: () => {
+        list.clear();
+        statusEl.textContent = 'Cleared';
+      }
+    });
+
+    // ==================== DRAG AND DROP ====================
+
+    let draggedItem = null;
+    let draggedIndex = null;
+    let dropIndicator = null;
+    let dropTargetIndex = null;
+
+    function enableDragAndDrop() {
+      const listEl = container.querySelector('.scroll-list');
+      
+      // Create drop indicator element
+      dropIndicator = document.createElement('div');
+      dropIndicator.className = 'drop-indicator';
+      dropIndicator.style.display = 'none';
+      
+      listEl.addEventListener('dragstart', handleDragStart);
+      listEl.addEventListener('dragover', handleDragOver);
+      listEl.addEventListener('drop', handleDrop);
+      listEl.addEventListener('dragend', handleDragEnd);
+      listEl.addEventListener('dragleave', handleDragLeaveList);
+    }
+
+    function disableDragAndDrop() {
+      const listEl = container.querySelector('.scroll-list');
+      
+      listEl.removeEventListener('dragstart', handleDragStart);
+      listEl.removeEventListener('dragover', handleDragOver);
+      listEl.removeEventListener('drop', handleDrop);
+      listEl.removeEventListener('dragend', handleDragEnd);
+      listEl.removeEventListener('dragleave', handleDragLeaveList);
+      
+      if (dropIndicator && dropIndicator.parentNode) {
+        dropIndicator.parentNode.removeChild(dropIndicator);
+      }
+      dropIndicator = null;
+    }
+
+    function handleDragStart(e) {
+      const item = e.target.closest('.scroll-list-item');
+      if (!item) return;
+      
+      draggedItem = item;
+      draggedIndex = parseInt(item.dataset.index, 10);
+      dropTargetIndex = draggedIndex;
+      
+      // Slight delay so the dragging class applies after drag image is captured
+      setTimeout(() => {
+        item.classList.add('dragging');
+      }, 0);
+      
+      e.dataTransfer.effectAllowed = 'move';
+    }
+
+    function handleDragOver(e) {
+      e.preventDefault();
+      if (!draggedItem) return;
+      
+      const listEl = container.querySelector('.scroll-list');
+      const items = listEl.querySelectorAll('.scroll-list-item:not(.dragging)');
+      
+      // Clear previous gaps and indicator-at-top
+      items.forEach(el => el.classList.remove('gap-above', 'gap-below'));
+      listEl.classList.remove('indicator-at-top');
+      
+      // Find which item we're over and whether we're in top or bottom half
+      let insertIndex = null;
+      let insertAfterItem = null;
+      let foundPosition = false;
+      
+      for (const item of items) {
+        const rect = item.getBoundingClientRect();
+        const midpoint = rect.top + rect.height / 2;
+        const itemIndex = parseInt(item.dataset.index, 10);
+        
+        if (e.clientY < midpoint) {
+          // Above midpoint - insert before this item
+          insertIndex = itemIndex;
+          item.classList.add('gap-above');
+          
+          // Position indicator before this item
+          if (dropIndicator.parentNode !== listEl) {
+            listEl.appendChild(dropIndicator);
+          }
+          listEl.insertBefore(dropIndicator, item);
+          dropIndicator.style.display = 'block';
+          
+          // If this is the first item, add extra top padding
+          if (itemIndex === 0 || (itemIndex === 1 && draggedIndex === 0)) {
+            listEl.classList.add('indicator-at-top');
+          }
+          
+          foundPosition = true;
+          break;
+        } else {
+          // Below midpoint - tentatively insert after this item
+          insertIndex = itemIndex + 1;
+          insertAfterItem = item;
+        }
+      }
+      
+      // If below the last item (or below all items), always show at bottom
+      if (!foundPosition && insertAfterItem) {
+        insertAfterItem.classList.add('gap-below');
+        
+        if (dropIndicator.parentNode !== listEl) {
+          listEl.appendChild(dropIndicator);
+        }
+        // Insert after the last item
+        if (insertAfterItem.nextSibling && insertAfterItem.nextSibling !== dropIndicator) {
+          listEl.insertBefore(dropIndicator, insertAfterItem.nextSibling);
+        } else if (!insertAfterItem.nextSibling) {
+          listEl.appendChild(dropIndicator);
+        }
+        dropIndicator.style.display = 'block';
+      }
+      
+      // If cursor is below all items entirely, keep indicator at bottom
+      if (items.length > 0 && !foundPosition) {
+        const lastItem = items[items.length - 1];
+        const lastRect = lastItem.getBoundingClientRect();
+        if (e.clientY > lastRect.bottom) {
+          // We're below everything - ensure indicator stays at bottom
+          insertIndex = list.getCount();
+          lastItem.classList.add('gap-below');
+          if (dropIndicator.parentNode !== listEl) {
+            listEl.appendChild(dropIndicator);
+          }
+          listEl.appendChild(dropIndicator);
+          dropIndicator.style.display = 'block';
+        }
+      }
+      
+      // Adjust for the dragged item's original position
+      if (insertIndex !== null) {
+        if (insertIndex > draggedIndex) {
+          insertIndex -= 1; // Account for removal of dragged item
+        }
+        dropTargetIndex = insertIndex;
+      }
+    }
+
+    function handleDragLeaveList(e) {
+      // Only reset if we're leaving the window entirely (drop outside = snap back)
+      const listEl = container.querySelector('.scroll-list');
+      const listContainer = container;
+      
+      // Check if we left the entire container (not just moving between items)
+      if (!listContainer.contains(e.relatedTarget) && !listEl.contains(e.relatedTarget)) {
+        // Reset to original position
+        dropTargetIndex = draggedIndex;
+        dropIndicator.style.display = 'none';
+        listEl.classList.remove('indicator-at-top');
+        listEl.querySelectorAll('.gap-above, .gap-below').forEach(el => {
+          el.classList.remove('gap-above', 'gap-below');
+        });
+      }
+    }
+
+    function handleDrop(e) {
+      e.preventDefault();
+      if (!draggedItem || dropTargetIndex === null) return;
+      
+      // Reorder the items array
+      const items = list.getItems();
+      const [removed] = items.splice(draggedIndex, 1);
+      
+      // Insert at the target position
+      items.splice(dropTargetIndex, 0, removed);
+      list.setItems(items);
+      
+      statusEl.textContent = `Moved to position ${dropTargetIndex + 1}`;
+      
+      cleanupDrag();
+    }
+
+    function handleDragEnd(e) {
+      cleanupDrag();
+    }
+
+    function cleanupDrag() {
+      const listEl = container.querySelector('.scroll-list');
+      
+      listEl.querySelectorAll('.dragging, .gap-above, .gap-below').forEach(el => {
+        el.classList.remove('dragging', 'gap-above', 'gap-below');
+      });
+      listEl.classList.remove('indicator-at-top');
+      
+      if (dropIndicator) {
+        dropIndicator.style.display = 'none';
+      }
+      
+      draggedItem = null;
+      draggedIndex = null;
+      dropTargetIndex = null;
+    }
+
+    // ==================== DATA LOADING ====================
+
+    async function loadDrives() {
+      statusEl.textContent = 'Loading...';
+      
+      try {
+        const paths = [
+          '../../../peardrop/drives.json',
+          '../../peardrop/drives.json',
+          '/Users/jarvis/peardrop/drives.json',
+          'drives.json'
+        ];
+        
+        let drives = null;
+        
+        for (const path of paths) {
+          try {
+            const response = await fetch(path);
+            if (response.ok) {
+              const data = await response.json();
+              drives = data.drives || data;
+              statusEl.textContent = `Loaded from ${path}`;
+              break;
+            }
+          } catch (e) {}
+        }
+        
+        if (drives && Array.isArray(drives)) {
+          list.setItems(drives);
+        } else {
+          loadSampleData();
+        }
+      } catch (err) {
+        statusEl.textContent = `Error: ${err.message}`;
+        loadSampleData();
+      }
+    }
+
+    function loadSampleData() {
+      const samples = [
+        { driveId: 'drive_001', name: 'Project Files.zip', type: 'upload', status: 'active', totalBytes: 52428800, fileCount: 12 },
+        { driveId: 'drive_002', name: 'Photos 2024', type: 'upload', status: 'paused', totalBytes: 1073741824, fileCount: 347 },
+        { driveId: 'drive_003', name: 'document.pdf', type: 'download', status: 'local', totalBytes: 2457600, fileCount: 1 },
+        { driveId: 'drive_004', name: 'backup-march.tar', type: 'upload', status: 'active', totalBytes: 5368709120, fileCount: 1 },
+        { driveId: 'drive_005', name: 'Music Collection', type: 'download', status: 'active', totalBytes: 8589934592, fileCount: 892 },
+      ];
+      list.setItems(samples);
+      statusEl.textContent = 'Loaded sample data';
+    }
+
+    // ==================== PUBLIC API ====================
+    
+    // Expose to console and for external use
+    window.driveList = list;
+    window.driveMenu = menu;
+    
+    /**
+     * External API for adding menu items
+     * 
+     * Usage from parent app:
+     *   window.driveMenu.addItem({
+     *     id: 'delete-selected',
+     *     label: 'Delete Selected',
+     *     icon: '🗑️',
+     *     action: () => { ... }
+     *   });
+     */
+    
+    console.log('ScrollList API: window.driveList');
+    console.log('MenuManager API: window.driveMenu');
+    console.log('');
+    console.log('Add menu item:');
+    console.log('  driveMenu.addItem({ id: "test", label: "Test", icon: "🔧", action: () => alert("hi") })');
+  </script>
+</body>
+</html>

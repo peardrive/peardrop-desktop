@@ -1,0 +1,4819 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PearDrop</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+            /* Redesign v2 palette (segmented-control tabs):
+                 body     = pure onyx black (backdrop)
+                 .app     = dark grey (content panel) — matches active tab
+                 tabs container = lighter grey — matches inactive tab
+               so the ACTIVE tab visually blends with the panel below,
+               and the INACTIVE tab blends into the container's curve. */
+            background: #000000;
+            color: #ffffff;
+            height: 100vh;
+            overflow: hidden;
+            user-select: none;
+            -webkit-font-smoothing: antialiased;
+            position: relative;
+        }
+
+        /* ============================================================
+           BEGIN: Soft Aurora background (reactbits.dev-inspired)
+           To revert: delete this entire block + the position:relative
+           on body above + the .app `position: relative; z-index: 1`.
+           ============================================================ */
+        body::before {
+            /* Aurora disabled per Figma redesign — solid dark palette only. */
+            display: none;
+            content: '';
+        }
+
+        @keyframes aurora-drift {
+            0%   { transform: translate3d(0, 0, 0) rotate(0deg) scale(1.0); }
+            33%  { transform: translate3d(-3%, 2%, 0) rotate(6deg) scale(1.04); }
+            66%  { transform: translate3d(2%, -2.5%, 0) rotate(-5deg) scale(1.02); }
+            100% { transform: translate3d(-1%, 1%, 0) rotate(3deg) scale(1.05); }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            body::before { animation: none; }
+        }
+        /* ============================================================
+           END: Soft Aurora background
+           ============================================================ */
+
+        /* App shell wraps the sidebar (hidden in mobile-UI, shown in
+           desktop-UI) and the main app column.
+           NOTE: no `z-index` here — that used to create a stacking-context
+           trap that prevented the sidebar's children from ever competing
+           with the drag-region at body's root. The aurora body::before
+           is at z-index: 0 with pointer-events: none, so it's still
+           painted behind app-shell naturally via DOM order. */
+        .app-shell {
+            position: relative;
+            display: flex;
+            flex-direction: row;
+            height: 100vh;
+            min-width: 0;
+        }
+
+        .app {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            padding: 16px;
+            padding-top: 35px; /* Space for drag region + header */
+            gap: 12px;
+            flex: 1;
+            min-width: 0;
+            position: relative; /* anchor for the desktop-Share floating button */
+            /* App bg is pitch black — the drives-list container carries
+               a top-to-bottom gradient (grey → black) so it fades into
+               the body naturally. Active tab keeps its #1a1a20 fill so
+               its bottom edge blends into the container's top gradient. */
+            background: #000000;
+        }
+
+        /* Page header — desktop-UI only. Sits above the page content with
+           a big title indicating which page (Shares / Receive / folder). */
+        .page-header {
+            display: none;
+            padding: 0 4px;
+            flex-shrink: 0;
+        }
+
+        .page-title {
+            font-size: 26px;
+            font-weight: 700;
+            color: #fff;
+            margin: 0;
+            letter-spacing: -0.3px;
+            line-height: 1.2;
+        }
+
+        @media (min-width: 600px) {
+            .page-header {
+                display: block;
+            }
+        }
+
+        /* ============================ Sidebar ============================
+           Mobile-UI (default, < 600px): hidden — the existing top tab/
+           tab-bar handles navigation. Desktop-UI (≥ 600px): shown as a
+           200px-wide column on the left.
+           ================================================================ */
+        /* ============================================================
+           SIDEBAR — full rebuild. Plain flex-column that sits inside
+           .app-shell's flex row. No positioning tricks, no z-index
+           gymnastics, no drag-region overrides needed:
+             - .app-shell's stacking-context trap (z-index: 1) is removed
+               so children compete at body's root.
+             - .drag-region is inset from the left by 200px on desktop
+               so it never overlays the sidebar's top strip.
+           Result: every sidebar item is clickable across its whole
+           surface, including the top row.
+           ============================================================ */
+        .sidebar {
+            display: none;
+            flex-direction: column;
+            width: 200px;
+            flex-shrink: 0;
+            padding: 10px 12px 14px;
+            background: rgba(20, 20, 24, 0.5);
+            backdrop-filter: blur(28px) saturate(140%);
+            -webkit-backdrop-filter: blur(28px) saturate(140%);
+            border-right: 1px solid rgba(255, 255, 255, 0.06);
+            gap: 6px;
+        }
+
+        .sidebar-nav {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .sidebar-footer {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .sidebar-nav-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            width: 100%;
+            padding: 10px 12px;
+            border: none;
+            background: transparent;
+            color: rgba(255, 255, 255, 0.72);
+            font-size: 13px;
+            font-weight: 500;
+            font-family: inherit;
+            text-align: left;
+            cursor: pointer;
+            border-radius: 8px;
+            transition: background 0.15s ease, color 0.15s ease;
+        }
+
+        .sidebar-nav-item:hover:not(:disabled) {
+            background: rgba(255, 255, 255, 0.06);
+            color: #fff;
+        }
+
+        .sidebar-nav-item.is-active {
+            background: rgba(168, 206, 56, 0.18);
+            color: rgba(168, 206, 56, 1);
+        }
+
+        .sidebar-nav-item:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .sidebar-nav-icon {
+            font-size: 16px;
+            width: 18px;
+            text-align: center;
+            flex-shrink: 0;
+            line-height: 1;
+        }
+
+        .sidebar-nav-label {
+            flex: 1;
+            min-width: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* CTA-style sidebar item — used for "+ Add Folder". Dashed
+           outline "add new" convention, uppercase bold text. */
+        .sidebar-nav-item.sidebar-nav-cta {
+            text-transform: uppercase;
+            font-weight: 700;
+            font-size: 12px;
+            letter-spacing: 0.8px;
+            color: #fff;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px dashed rgba(255, 255, 255, 0.2);
+            margin-top: 6px;
+        }
+
+        .sidebar-nav-item.sidebar-nav-cta .sidebar-nav-icon {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .sidebar-nav-item.sidebar-nav-cta:hover:not(:disabled) {
+            background: rgba(168, 206, 56, 0.12);
+            border-color: rgba(168, 206, 56, 0.55);
+            color: rgba(168, 206, 56, 1);
+        }
+
+        /* Desktop-UI breakpoint: window ≥ 600px → sidebar appears. The
+           Share/Receive tabs in the column header are redundant on desktop
+           (sidebar handles that nav), so hide them. */
+        @media (min-width: 600px) {
+            .sidebar {
+                display: flex;
+            }
+            .app-shell .tab-bar .tabs {
+                display: none;
+            }
+        }
+
+        /* ============================================================
+           Page-switch list filter — applies in BOTH layouts (mobile tabs
+           and desktop sidebar both filter the drives list).
+           ============================================================ */
+        #listContainer.view-share .scroll-list-slot[data-type="download"] {
+            display: none;
+        }
+        #listContainer.view-receive .scroll-list-slot[data-type="share"] {
+            display: none;
+        }
+
+        /* Bottom bar wrapper — only the action buttons live here now.
+           Mobile-UI lays it out as a normal block at the bottom of .app. */
+        .bottom-bar {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+
+        /* Mobile-UI: the link input was originally INSIDE the bottom-bar,
+           visually just above the action buttons. We pulled it out in the
+           DOM so it can take the drop-zone slot on desktop Receive; on
+           mobile, use flex `order` so it still renders right above the
+           bottom-bar (no visual change from before). */
+        .link-input-container {
+            order: 5;
+        }
+        .bottom-bar {
+            order: 6;
+        }
+
+        /* Wrapper around <input.link-input> + QR button. Provides the
+           positioning context for the absolutely-positioned QR button
+           (previously anchored to .link-input-container). Layout-neutral
+           on mobile — behaves like the input took the full width. */
+        .link-input-field {
+            position: relative;
+            display: block;
+            width: 100%;
+        }
+
+        /* ============================================================
+           Desktop-UI page-swap layout (≥ 600px only).
+           In mobile-UI the drop zone, link input, and BOTH action buttons
+           stay visible at all times regardless of the active tab — only
+           the list filter applies.
+           ============================================================ */
+        @media (min-width: 600px) {
+            /* Receive page: hide the drop zone. Share page: hide the link
+               input (no link to paste when sharing). */
+            .app.page-receive .drop-zone {
+                display: none;
+            }
+            .app.page-share .link-input-container {
+                display: none;
+            }
+
+            /* Per-page action button: SHARE on Share, DOWNLOAD on Receive. */
+            .app.page-share .actions .action-btn.download {
+                display: none;
+            }
+            .app.page-receive .actions .action-btn.share {
+                display: none;
+            }
+
+            /* ==================================================
+               Desktop panel redesign — VERTICAL STACK (hero + rail).
+               Both panels are 150px tall glass boxes with two zones:
+                 HERO — inset card (dashed drop / bordered input), fills
+                        the upper area and is the interaction target.
+                 RAIL — full-width primary action button flush at the
+                        bottom, uppercase + arrow glyph.
+               ================================================== */
+
+            /* Both pages: hide the mobile .bottom-bar (its action moved
+               into the panel rail below). */
+            .app.page-share .bottom-bar,
+            .app.page-receive .bottom-bar {
+                display: none;
+            }
+
+            /* Shared bottom rail — the primary action button.
+               Overrides all mobile flex/absolute positioning so it spans
+               the panel's full width, sits flush at the bottom, and clips
+               to the panel's rounded corners via the panel's overflow. */
+            .app.page-share .drop-zone-share-btn,
+            .app.page-receive .link-input-download-btn {
+                display: inline-flex;
+                position: static;
+                top: auto;
+                right: auto;
+                bottom: auto;
+                left: auto;
+                transform: none;
+                width: 100%;
+                min-width: 0;
+                height: 44px;
+                padding: 0 20px;
+                flex: 0 0 auto;
+                align-items: center;
+                justify-content: center;
+                gap: 6px;
+                border-radius: 0;
+                font-size: 13px;
+                font-weight: 700;
+                letter-spacing: 1.5px;
+                text-transform: uppercase;
+                z-index: 3;
+            }
+            /* Neutralize the mobile lift-on-hover — the rail is bottom-
+               flush and a lift reveals the panel edge underneath. */
+            .app.page-share .drop-zone-share-btn:hover,
+            .app.page-receive .link-input-download-btn:hover {
+                transform: none;
+            }
+            /* Arrow glyph after the label — pure CSS so it survives JS
+               textContent updates (SHARING…, DOWNLOADING…). */
+            .app.page-share .drop-zone-share-btn::after {
+                content: '→';
+                font-size: 16px;
+                font-weight: 500;
+                letter-spacing: 0;
+                line-height: 1;
+                margin-left: 2px;
+            }
+            .app.page-receive .link-input-download-btn::after {
+                content: '↓';
+                font-size: 16px;
+                font-weight: 500;
+                letter-spacing: 0;
+                line-height: 1;
+                margin-left: 2px;
+            }
+
+            /* ---- SHARE (drop-zone) ---------------------------------- */
+            .app.page-share .drop-zone {
+                height: 150px;
+                flex-direction: column;
+                align-items: stretch;
+                justify-content: flex-start;
+                padding: 0;
+                gap: 0;
+                overflow: hidden;
+                cursor: default;
+            }
+
+            /* HERO (empty state): dashed aurora-green drop card, inset
+               from the panel edges. The click / drop target. */
+            .app.page-share .drop-content {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                flex: 1;
+                min-height: 0;
+                text-align: center;
+                margin: 12px 12px 8px;
+                padding: 6px 16px;
+                border: 1.5px dashed rgba(168, 206, 56, 0.28);
+                border-radius: 12px;
+                background: rgba(168, 206, 56, 0.03);
+                transition: border-color 0.25s ease, background 0.25s ease;
+                cursor: pointer;
+            }
+            .app.page-share .drop-zone:hover .drop-content,
+            .app.page-share .drop-zone.drag-over .drop-content {
+                border-color: rgba(168, 206, 56, 0.55);
+                background: rgba(168, 206, 56, 0.07);
+            }
+            .app.page-share .drop-content .drop-icon {
+                font-size: 26px;
+                margin: 0 0 4px;
+                opacity: 0.85;
+            }
+            .app.page-share .drop-content .drop-text {
+                font-size: 14px;
+                font-weight: 600;
+                letter-spacing: 0.3px;
+                margin: 0 0 2px;
+            }
+            .app.page-share .drop-content .drop-hint {
+                font-size: 12px;
+                color: rgba(255, 255, 255, 0.5);
+                margin: 0;
+            }
+
+            /* HERO (has-files state): swapped in via .active on file-preview.
+               Same inset card outline (solid instead of dashed), horizontal
+               layout: icon | name/size | clear button. */
+            .app.page-share .file-preview.active {
+                display: flex;
+                flex-direction: row;
+                align-items: center;
+                gap: 14px;
+                flex: 1;
+                min-height: 0;
+                text-align: left;
+                margin: 12px 12px 8px;
+                padding: 0 14px;
+                border: 1.5px solid rgba(255, 255, 255, 0.12);
+                border-radius: 12px;
+                background: rgba(255, 255, 255, 0.03);
+            }
+            .app.page-share .file-preview .file-icon-large {
+                font-size: 30px;
+                margin: 0;
+                flex-shrink: 0;
+            }
+            .app.page-share .file-preview .file-info {
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: flex-start;
+                gap: 2px;
+                min-width: 0;
+                flex: 1;
+                text-align: left;
+            }
+            .app.page-share .file-preview .file-name {
+                font-size: 14px;
+                font-weight: 600;
+                max-width: none;
+            }
+            .app.page-share .file-preview .file-size {
+                font-size: 12px;
+                color: rgba(255, 255, 255, 0.55);
+            }
+            .app.page-share .file-preview .clear-btn {
+                margin: 0;
+                flex-shrink: 0;
+            }
+
+            /* Desktop column ordering — top to bottom:
+                 -10  page-header (always first)
+                  0   drop-zone / link-input-container (box, default)
+                  1   bottom-bar (action button, just under the box)
+                  2   tab-bar (empty on desktop — its 3-dot menu is lifted
+                              to the top-right, see rule below)
+                  3   list-container (fills the rest) */
+            .page-header {
+                order: -10;
+            }
+            .app-shell .tab-bar {
+                order: 2;
+            }
+            .app-shell #listContainer {
+                order: 3;
+            }
+
+            /* Lift the 3-dot list menu out of the tab-bar row and anchor
+               it to the top-right of the main column, aligned with the page
+               heading. The dropdown (position: absolute; top: 100%; right:
+               0) still opens directly below the button since the container
+               remains its positioning ancestor. */
+            .app-shell .tab-bar .list-menu-container {
+                position: absolute;
+                top: 40px;
+                right: 16px;
+                margin: 0;
+            }
+
+            /* ---- RECEIVE — Unified Pill Control (fresh redesign) ----
+               The panel shrinks to just hug the pill (78px tall). The
+               pill (input + QR + DOWNLOAD) fills the panel width with a
+               small margin from the edges. Two segments MEET seamlessly.
+               --------------------------------------------------------- */
+            .app.page-receive .link-input-container {
+                order: 0;
+                height: 78px;
+                flex-shrink: 0;
+                position: relative;
+                display: flex;
+                flex-direction: row;
+                align-items: center;
+                justify-content: stretch;
+                padding: 0 14px;
+                gap: 0;
+                /* Outer glass panel around the pill — app-wide iOS-frosted-
+                   glass recipe (same as .modal / .glass / dropdowns). */
+                border-radius: 16px;
+                background: rgba(180, 184, 195, 0.22);
+                backdrop-filter: blur(6px) saturate(150%);
+                -webkit-backdrop-filter: blur(6px) saturate(150%);
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+                overflow: hidden;
+            }
+
+            /* Pill LEFT segment: input + QR button.
+               Flex-grows to fill available width; flat right edge welds
+               to the DOWNLOAD segment. */
+            .app.page-receive .link-input-field {
+                display: flex;
+                flex-direction: row;
+                align-items: center;
+                height: 50px;
+                width: auto;
+                max-width: none;
+                padding: 0 8px 0 18px;
+                position: relative;
+                flex: 1 1 auto;
+                min-width: 0;
+                min-height: 0;
+                margin: 0;
+                align-self: auto;
+                background: rgba(18, 18, 20, 0.65);
+                border: 1.5px solid rgba(255, 255, 255, 0.1);
+                border-right: none;
+                border-radius: 25px 0 0 25px;
+                transition: background 0.25s ease, border-color 0.25s ease;
+                overflow: hidden;
+            }
+            .app.page-receive .link-input-field::before {
+                content: '🔗';
+                font-size: 16px;
+                margin-right: 10px;
+                opacity: 0.55;
+                flex-shrink: 0;
+                line-height: 1;
+                transition: opacity 0.25s ease;
+            }
+            .app.page-receive .link-input-field:focus-within {
+                background: rgba(28, 30, 22, 0.75);
+                border-color: rgba(168, 206, 56, 0.45);
+            }
+            .app.page-receive .link-input-field:focus-within::before {
+                opacity: 0.95;
+            }
+
+            .app.page-receive .link-input {
+                background: transparent;
+                border: none;
+                border-radius: 0;
+                font-size: 13px;
+                line-height: 1.4;
+                padding: 0;
+                margin: 0;
+                width: 100%;
+                min-width: 0;
+                flex: 1;
+                color: #fff;
+                box-shadow: none;
+            }
+            .app.page-receive .link-input:focus {
+                background: transparent;
+                border: none;
+                outline: none;
+                box-shadow: none;
+            }
+            .app.page-receive .link-input::placeholder {
+                color: rgba(255, 255, 255, 0.35);
+                letter-spacing: 0.2px;
+            }
+
+            /* QR button — inline flex child inside the pill's left segment. */
+            .app.page-receive .qr-upload-btn {
+                position: static;
+                top: auto;
+                right: auto;
+                bottom: auto;
+                left: auto;
+                transform: none;
+                width: 34px;
+                height: 34px;
+                border-radius: 8px;
+                flex-shrink: 0;
+                margin-left: 4px;
+            }
+            .app.page-receive .qr-upload-btn:hover {
+                background: rgba(168, 206, 56, 0.18);
+                color: rgba(168, 206, 56, 0.95);
+            }
+
+            /* Pill RIGHT segment: DOWNLOAD button.
+               Flat left edge — welds to the input segment. Fixed-width
+               capsule end-cap, matches the pill segment's 50px height. */
+            .app.page-receive .link-input-download-btn {
+                position: static;
+                top: auto;
+                right: auto;
+                bottom: auto;
+                left: auto;
+                transform: none;
+                width: auto;
+                min-width: 148px;
+                max-width: 168px;
+                height: 50px;
+                padding: 0 22px;
+                flex: 0 0 auto;
+                border-radius: 0 25px 25px 0;
+                /* Elevated on top of the input-segment border seam. */
+                z-index: 4;
+            }
+            .app.page-receive .link-input-download-btn:hover {
+                transform: none;
+            }
+
+            /* =====================================================
+               ALL SHARES page — both drop-zone AND link-input pill
+               visible together. .app has page-share + page-receive
+               + page-allshares, so every existing hero-rail and pill
+               style fires. The one thing to fix is the drop-zone,
+               which page-receive hides — override it here. The
+               link-input-container already wins over page-share's
+               hide rule via its later `display: flex` declaration.
+               ===================================================== */
+            .app.page-allshares .drop-zone {
+                display: flex;
+            }
+
+            /* ---- Mode switch (Send / Receive) — All Shares only ----- */
+            .app.page-allshares .mode-tabs {
+                display: inline-flex;
+                align-self: center;
+                gap: 4px;
+                padding: 4px;
+                background: rgba(20, 20, 24, 0.5);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 999px;
+                margin: 0 auto;
+                order: -5; /* between page-header (-10) and boxes (0) */
+                flex-shrink: 0;
+            }
+
+            /* Mode filter — hide the inactive box. Specificity 0,0,3,0
+               beats the earlier `.app.page-allshares .drop-zone { display:
+               flex }` re-show rule (0,0,2,0). */
+            .app.page-allshares.mode-send .link-input-container {
+                display: none;
+            }
+            .app.page-allshares.mode-receive .drop-zone {
+                display: none;
+            }
+        }
+
+        /* Mode tab base — hidden by default; only made visible on
+           .app.page-allshares desktop (rule above). */
+        .mode-tabs {
+            display: none;
+        }
+        .mode-tab {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 16px;
+            border: none;
+            background: transparent;
+            color: rgba(255, 255, 255, 0.6);
+            font-family: inherit;
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+            border-radius: 999px;
+            cursor: pointer;
+            transition: background 0.2s ease, color 0.2s ease;
+        }
+        .mode-tab:hover:not(.is-active) {
+            color: rgba(255, 255, 255, 0.9);
+        }
+        .mode-tab.is-active {
+            background: rgba(168, 206, 56, 0.2);
+            color: rgba(168, 206, 56, 1);
+        }
+        .mode-tab-icon {
+            font-size: 14px;
+            line-height: 1;
+        }
+
+        /* ============================================================
+           DESKTOP v2 SHELL — top bar + search toolbar.
+           Hidden on mobile; shown at >= 600px alongside the old chrome
+           being hidden by the same @media block below.
+           ============================================================ */
+        .app-top-bar,
+        .search-toolbar {
+            display: none; /* mobile default */
+        }
+
+        @media (min-width: 600px) {
+            /* Hide the old desktop chrome — sidebar, page-header, drop-zone
+               panel, link-input pill, mobile tab-bar. All of it becomes
+               obsolete under the v2 shell. Modals will pick up Send/Receive
+               later; for now clicking those top-bar buttons is stubbed. */
+            .app-shell .sidebar,
+            .app .page-header,
+            .app .drop-zone,
+            .app .link-input-container,
+            .app .tab-bar,
+            .app .mode-tabs {
+                display: none !important;
+            }
+
+            /* ---- Top bar row ---- */
+            .app-top-bar {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 16px;
+                padding: 12px 0 0;
+                flex-shrink: 0;
+                order: -10;
+                margin-bottom: -12px;
+            }
+            /* Tabs ONLY get bottom alignment — so their bottom edge sits
+               flush against the container top for the seamless flow.
+               Send/Receive/gear (on .top-actions) stay center-aligned. */
+            .top-tabs {
+                align-self: flex-end;
+            }
+
+            /* ============================================================
+               Desktop drives list — 2-column card grid + vertical fade.
+               The container itself gets a top-to-bottom gradient (grey at
+               top, black at bottom) that visually merges into the app's
+               pitch-black bg. Inner .scroll-list is a 2-column grid.
+               ============================================================ */
+            #listContainer {
+                background: linear-gradient(
+                    to bottom,
+                    #1a1a20 0%,
+                    #14141a 40%,
+                    #000000 100%
+                );
+                /* No top radius — search-toolbar (visually the top of
+                   this panel) already has them. Flat top meets flat
+                   search-bar bottom, no visible seam. */
+                border-radius: 0;
+            }
+            #listContainer .scroll-list {
+                display: grid;
+                /* minmax(0, 1fr) — CRITICAL for the vertical separator
+                   to stay centered. Plain `1fr` uses `auto` as its
+                   implicit min, which means "at least the min-content
+                   width of the widest child". A drive-item with a long
+                   filename can force its column wider than its share,
+                   which shifts the actual column midpoint away from
+                   50% and makes the ::before separator drift into the
+                   narrower (left) column. `minmax(0, 1fr)` overrides
+                   the auto-min and forces both columns to be exactly
+                   equal, letting the drive-item's own title ellipsis
+                   handle overflow. */
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+                gap: 24px 32px;                  /* room for separators between rows AND columns */
+                align-content: start;
+                background: transparent;
+                padding: 12px 28px;              /* breathe from the container's left/right edges */
+                /* Anchor for the ::before vertical separator below. */
+                position: relative;
+            }
+            /* Narrow-desktop tightening — under ~1000px there isn't
+               enough width for the intended 28px side padding + 32px
+               column gap AND readable cards. Trim both so the 2-column
+               grid stays comfortable instead of crushing content.
+               Grid remains 2 columns; separator stays centered. */
+            @media (min-width: 600px) and (max-width: 999px) {
+                #listContainer .scroll-list {
+                    gap: 20px 20px;
+                    padding: 10px 14px;
+                }
+                /* Card max-width down + row-side padding trimmed so
+                   the thumb+title+button row still fits at ~380px per
+                   column without the button wrapping. */
+                body #listContainer .drive-item {
+                    padding: 14px 10px;
+                }
+            }
+            /* Vertical column separator — thin line down the middle of
+               the two-column drives grid.
+               NOT `left: 50%` — the ScrollList lib sets
+               `scrollbar-gutter: stable` on .scroll-list which reserves
+               ~8px on the right side. That shifts the two grid columns
+               leftward relative to the padding box, so `50%` lands to
+               the RIGHT of the true column midpoint. We compute the
+               midpoint from the actual grid geometry:
+                 columns span from padding-left (28px) to
+                 (100% − padding-right − scrollbar-gutter) = (100% − 28px − 8px)
+                 midpoint = (28px + (100% − 36px)) / 2 = 50% − 4px
+               `translateX(-50%)` then centers the 1px line ON that
+               midpoint so it's not a hair off due to sub-pixel
+               left-edge positioning. */
+            #listContainer .scroll-list::before {
+                content: '';
+                position: absolute;
+                top: 16px;
+                bottom: 16px;
+                left: calc(50% - 4px);
+                transform: translateX(-50%);
+                width: 1px;
+                background: rgba(255, 255, 255, 0.05);
+                pointer-events: none;
+            }
+
+            /* ============================================================
+               Top tabs — FOLDER-TAB pattern (Amir's target design).
+               Each tab is its own rounded-top-only rectangle. NO
+               wrapping segmented container.
+                 - Active tab: fill = content-panel color (#1a1a20). Its
+                   BOTTOM EDGE sits flush against the container top —
+                   because both are the same color and there's zero gap
+                   between the top-bar and the container, the tab looks
+                   like it "flows into" the container below.
+                 - Inactive tab: distinct darker card. Rounded top,
+                   floating separately.
+               N-tab friendly: any number of .top-tab elements slot in.
+               ============================================================ */
+            .top-tabs {
+                --tab-active-bg: #1a1a20;       /* matches container top */
+                --tab-inactive-bg: #2e2e34;     /* inactive card fill */
+
+                display: inline-flex;
+                gap: 0;
+                padding: 0;
+                background: #2e2e34;
+                border-radius: 14px 14px 0 0;   /* both top corners curved at all times */
+                align-items: flex-end;
+                overflow: visible;              /* allow the active-tab flare pseudos to extend outside */
+                position: relative;
+            }
+            .top-tab {
+                position: relative;             /* anchor for the always-rendered flare pseudos */
+                padding: 14px 32px 16px;
+                background: transparent;
+                border: none;
+                border-radius: 14px 14px 0 0;   /* rounded top only */
+                color: rgba(255, 255, 255, 0.65);
+                font-family: inherit;
+                font-size: 22px;
+                font-weight: 600;
+                letter-spacing: -0.3px;
+                cursor: pointer;
+                transition: background 0.18s ease, color 0.18s ease;
+                outline: none;
+            }
+            .top-tab:not(.is-active) {
+                background: transparent;   /* container's grey shows through */
+            }
+            .top-tab:hover:not(.is-active) {
+                color: rgba(255, 255, 255, 0.95);
+            }
+            .top-tab.is-active {
+                z-index: 2;                     /* keep flare pseudos above the inactive neighbour */
+                background: var(--tab-active-bg);
+                color: #ffffff;
+            }
+            /* Chrome-tab flare pseudos live on the tabs UNCONDITIONALLY so
+               there's nothing to spawn / tear down on a tab switch. Only
+               their background-color changes with .is-active, transitioned
+               alongside the tab's own fill → no shape blink.
+
+                 Shares (first-child)  → ::after      (right flare only)
+                 Favorites (last-child) → ::before + ::after (both flares)
+
+               Concave mask arcs AWAY from the tab so the tab's outer edge
+               reads as flaring OUT-and-DOWN into the container below. */
+            .top-tab:first-child::after,
+            .top-tab:last-child::before,
+            .top-tab:last-child::after {
+                content: '';
+                position: absolute;
+                bottom: 0;
+                width: 14px;                    /* match the tab's own top-corner radius (14px) */
+                height: 14px;
+                background: transparent;
+                pointer-events: none;
+                transition: background-color 120ms ease;
+            }
+            .top-tab.is-active:first-child::after,
+            .top-tab.is-active:last-child::before,
+            .top-tab.is-active:last-child::after {
+                background: var(--tab-active-bg);
+            }
+            .top-tab:first-child::after,
+            .top-tab:last-child::after {
+                right: -14px;
+                mask-image: radial-gradient(circle at top right, transparent 14px, black 14px);
+                -webkit-mask-image: radial-gradient(circle at top right, transparent 14px, black 14px);
+            }
+            .top-tab:last-child::before {
+                left: -14px;
+                mask-image: radial-gradient(circle at top left, transparent 14px, black 14px);
+                -webkit-mask-image: radial-gradient(circle at top left, transparent 14px, black 14px);
+            }
+            /* Keyboard focus indicator (Tab-nav only, not mouse clicks). */
+            .top-tab:focus-visible {
+                box-shadow: inset 0 0 0 2px rgba(168, 206, 56, 0.55);
+            }
+
+            /* ============================================================
+               SEND MODAL (Desktop v2)
+               Wider than the default .modal (which is 320px, sized for
+               mobile). Add Files hero card mirrors the Figma: dashed
+               green-tinted border, folder icon on the left, text on the
+               right, whole thing is a big click target.
+               ============================================================ */
+            /* CANONICAL MODAL APPEARANCE (Desktop v2)
+               All modal windows share:
+                 - width: 620px
+                 - min-height: 520px  (bigger vertical presence)
+                 - iOS-style frosted glass: heavy blur + saturate,
+                   translucent dark tint, subtle white top-inset for the
+                   glass "highlight" and a soft outer shadow.
+               Per-modal styles should NOT override these — leave them
+               to inherit. Recorded in CLAUDE.md. */
+            .modal-overlay .modal {
+                max-width: 760px;
+                min-height: 520px;
+                /* App-wide iOS-frosted-glass recipe — Amir tuned this
+                   on the kebab menu ("the best glass by far") and asked
+                   for it applied everywhere. Denser tints / heavier
+                   blurs erase shapes behind into flat grey. */
+                background: rgba(180, 184, 195, 0.22);
+                backdrop-filter: blur(6px) saturate(150%);
+                -webkit-backdrop-filter: blur(6px) saturate(150%);
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-radius: 22px;
+                box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+            }
+            /* Exception to the canonical 760×520 modal size: the QR scanner
+               is a small utility viewer (square camera feed + one dropdown
+               + one button). At 760px wide it dominated the viewport and
+               left huge dead space around the video. Kept narrow +
+               auto-height so it hugs its content. */
+            .modal-overlay .modal.qr-scanner-modal {
+                max-width: 440px;
+                min-height: 0;
+                padding: 22px 22px 20px;
+            }
+            /* Modal overlay scrim — 50% dim on the page behind every
+               modal so the modal's iOS-frosted-glass reads against a
+               calmer background. Applied globally after Amir validated
+               the strength on the Send modal.
+               NO backdrop-filter here — the modal itself provides the
+               blur. Nested backdrop-filter cancels out (blurring
+               already-blurred content). */
+            .modal-overlay {
+                background: rgba(0, 0, 0, 0.50);
+            }
+
+            .send-modal {
+                padding: 28px;
+                /* bg / border / blur inherited from canonical .modal rule */
+            }
+            .send-modal-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 20px;
+            }
+            .send-modal-title {
+                font-size: 22px;
+                font-weight: 600;
+                color: #ffffff;
+                margin: 0;
+            }
+            .send-modal-close {
+                width: 32px;
+                height: 32px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                background: transparent;
+                border: 2px solid rgba(255, 100, 100, 0.75);
+                border-radius: 8px;
+                color: rgba(255, 100, 100, 0.95);
+                font-size: 20px;
+                font-weight: 700;
+                line-height: 1;
+                cursor: pointer;
+                transition: background 0.15s ease, border-color 0.15s ease;
+            }
+            .send-modal-close:hover {
+                background: rgba(255, 100, 100, 0.12);
+                border-color: rgba(255, 100, 100, 0.9);
+            }
+            .send-add-files-card {
+                display: flex;
+                align-items: center;
+                gap: 24px;
+                width: 100%;
+                padding: 40px 28px;
+                background: linear-gradient(135deg, rgba(30, 55, 20, 0.55), rgba(24, 44, 30, 0.55));
+                border: 1px solid rgba(255, 255, 255, 0.05);
+                border-radius: 16px;
+                cursor: pointer;
+                text-align: left;
+                font-family: inherit;
+                color: inherit;
+                transition: background 0.2s ease, border-color 0.2s ease;
+            }
+            .send-add-files-card:hover {
+                background: linear-gradient(135deg, rgba(40, 70, 25, 0.65), rgba(28, 52, 35, 0.65));
+                border-color: rgba(168, 206, 56, 0.35);
+            }
+            .send-add-files-icon {
+                width: 60px;
+                height: 60px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                background: rgba(60, 60, 65, 0.85);
+                border-radius: 14px;
+                color: rgba(255, 255, 255, 0.85);
+                flex-shrink: 0;
+            }
+            .send-add-files-icon svg {
+                width: 30px;
+                height: 30px;
+            }
+            .send-add-files-title {
+                font-size: 20px;
+                font-weight: 600;
+                color: #ffffff;
+                margin-bottom: 4px;
+            }
+            .send-add-files-hint {
+                font-size: 14px;
+                color: rgba(255, 255, 255, 0.55);
+            }
+
+            /* State B — file preview + Share button. Hidden by default;
+               renderer.js flips visibility once activeFiles is populated. */
+            .send-file-review {
+                display: none;
+            }
+            .send-file-review.active {
+                display: block;
+            }
+            .send-modal.has-files .send-add-files-card {
+                display: none;
+            }
+            .send-file-review-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 12px;
+            }
+            .send-file-review-title {
+                font-size: 14px;
+                color: rgba(255, 255, 255, 0.7);
+            }
+            .send-file-review-clear {
+                background: transparent;
+                border: none;
+                color: rgba(168, 206, 56, 1);
+                font-family: inherit;
+                font-size: 14px;
+                font-weight: 700;
+                cursor: pointer;
+                padding: 6px 10px;
+                border-radius: 8px;
+                transition: background 0.15s ease, color 0.15s ease;
+            }
+            .send-file-review-clear:hover {
+                background: rgba(168, 206, 56, 0.1);
+                color: #b8de48;
+            }
+            .send-file-review-list {
+                max-height: 240px;
+                overflow-y: auto;
+                margin-bottom: 16px;
+                background: rgba(20, 20, 22, 0.6);
+                border-radius: 10px;
+                padding: 6px;
+            }
+            .send-file-review-item {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                padding: 8px 10px;
+                border-radius: 8px;
+            }
+            .send-file-review-item + .send-file-review-item {
+                border-top: 1px solid rgba(255, 255, 255, 0.04);
+            }
+            .send-file-review-item-icon {
+                font-size: 22px;
+                line-height: 1;
+                flex-shrink: 0;
+                width: 32px;
+                text-align: center;
+            }
+            .send-file-review-item-info {
+                flex: 1;
+                min-width: 0;
+            }
+            .send-file-review-item-name {
+                font-size: 13px;
+                color: #ffffff;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .send-file-review-item-size {
+                font-size: 11px;
+                color: rgba(255, 255, 255, 0.5);
+            }
+            /* Per-file "Cancel send" button — hidden by default, fades in
+               when the user hovers over the file row. Focus-within also
+               reveals it for keyboard nav. Muted red so users know it's
+               a subtraction, not a destructive delete. */
+            .send-file-review-item {
+                position: relative;
+            }
+            .send-file-review-item-cancel {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                padding: 5px 10px;
+                background: transparent;
+                border: 1px solid rgba(255, 100, 100, 0.35);
+                border-radius: 7px;
+                color: rgba(255, 130, 130, 0.9);
+                font-family: inherit;
+                font-size: 11px;
+                font-weight: 500;
+                cursor: pointer;
+                flex-shrink: 0;
+                opacity: 0;
+                pointer-events: none;
+                transition: opacity 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+            }
+            .send-file-review-item:hover .send-file-review-item-cancel,
+            .send-file-review-item:focus-within .send-file-review-item-cancel {
+                opacity: 1;
+                pointer-events: auto;
+            }
+            .send-file-review-item-cancel:hover {
+                background: rgba(255, 100, 100, 0.1);
+                border-color: rgba(255, 100, 100, 0.6);
+            }
+            .send-file-review-item-cancel-icon {
+                width: 12px;
+                height: 12px;
+                display: inline-flex;
+            }
+
+            /* Recent Shares — 2-column grid of the user's previously
+               shared items, shown under the primary action in the Send
+               modal. Each card is a compact row: thumb + name + Link
+               button that copies the peardrop:// link to clipboard. */
+            .send-recent {
+                display: none;   /* revealed by renderer.js when drives exist */
+                margin-top: 24px;
+            }
+            .send-recent.active {
+                display: block;
+            }
+            .send-recent-divider {
+                height: 1px;
+                background: rgba(255, 255, 255, 0.06);
+                margin-bottom: 16px;
+            }
+            .send-recent-header {
+                font-size: 15px;
+                font-weight: 600;
+                color: #ffffff;
+                margin-bottom: 12px;
+            }
+            .send-recent-grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 8px;
+                max-height: 240px;
+                overflow-y: auto;
+            }
+            .send-recent-empty {
+                display: none;
+                font-size: 13px;
+                color: rgba(255, 255, 255, 0.4);
+                text-align: center;
+                padding: 12px 0;
+            }
+            .send-recent.is-empty .send-recent-grid { display: none; }
+            .send-recent.is-empty .send-recent-empty { display: block; }
+            .send-recent-item {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                padding: 6px 4px;
+                overflow: hidden;
+            }
+            .send-recent-item-thumb {
+                width: 44px;
+                height: 44px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                background: rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
+                font-size: 20px;
+                flex-shrink: 0;
+                overflow: hidden;
+            }
+            .send-recent-item-thumb img {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+                display: block;
+            }
+            .send-recent-item-info {
+                flex: 1;
+                min-width: 0;
+            }
+            .send-recent-item-name {
+                font-size: 14px;
+                color: #ffffff;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                margin-bottom: 2px;
+            }
+            .send-recent-item-subtitle {
+                font-size: 12px;
+                color: rgba(255, 255, 255, 0.5);
+            }
+            .send-recent-item-subtitle-status {
+                color: rgba(168, 206, 56, 0.85);
+            }
+            .send-recent-item-link {
+                padding: 6px 16px;
+                background: transparent;
+                border: 1px solid rgba(168, 206, 56, 0.55);
+                border-radius: 7px;
+                color: rgba(168, 206, 56, 0.95);
+                font-family: inherit;
+                font-size: 12px;
+                font-weight: 600;
+                cursor: pointer;
+                flex-shrink: 0;
+                transition: background 0.15s ease;
+            }
+            .send-recent-item-link:hover {
+                background: rgba(168, 206, 56, 0.12);
+            }
+            .send-share-btn {
+                width: 100%;
+                height: 48px;
+                background: linear-gradient(135deg, #a8ce38 0%, #76bf52 100%);
+                border: none;
+                border-radius: 12px;
+                color: #0a1a0a;
+                font-family: inherit;
+                font-size: 15px;
+                font-weight: 700;
+                cursor: pointer;
+                transition: filter 0.15s ease;
+            }
+            .send-share-btn:hover {
+                filter: brightness(1.08);
+            }
+            .send-share-btn:disabled {
+                filter: brightness(0.65);
+                cursor: not-allowed;
+            }
+
+            /* ============================================================
+               RECEIVE MODAL (Desktop v2) — reuses .send-modal for header
+               shell, then adds its own paste row, "or" divider, QR
+               scanner area, and import-QR-image button.
+               ============================================================ */
+            .receive-modal {
+                padding: 28px;
+                /* width / bg / border / blur inherited from canonical .modal rule */
+            }
+            .receive-paste-row {
+                display: flex;
+                gap: 10px;
+                margin-bottom: 18px;
+            }
+            .receive-paste-input {
+                flex: 1;
+                min-width: 0;
+                height: 48px;
+                padding: 0 16px;
+                background: rgba(20, 20, 22, 0.9);
+                border: 2px solid rgba(255, 255, 255, 0.1);
+                border-radius: 12px;
+                color: #ffffff;
+                font-family: inherit;
+                font-size: 14px;
+                font-weight: 500;
+                outline: none;
+                transition: border-color 0.2s ease;
+            }
+            .receive-paste-input:focus {
+                border-color: rgba(168, 206, 56, 0.5);
+            }
+            .receive-paste-input::placeholder {
+                color: rgba(255, 255, 255, 0.35);
+            }
+            .receive-paste-btn {
+                min-width: 90px;
+                padding: 0 20px;
+                background: linear-gradient(135deg, #a8ce38 0%, #76bf52 100%);
+                border: none;
+                border-radius: 10px;
+                color: #0a1a0a;
+                font-family: inherit;
+                font-size: 14px;
+                font-weight: 700;
+                cursor: pointer;
+                transition: filter 0.15s ease;
+            }
+            .receive-paste-btn:hover {
+                filter: brightness(1.08);
+            }
+            .receive-paste-btn:active {
+                filter: brightness(0.95);
+            }
+            .receive-or-divider {
+                display: flex;
+                align-items: center;
+                gap: 14px;
+                margin: 4px 0 16px;
+            }
+            .receive-or-line {
+                flex: 1;
+                height: 1px;
+                background: rgba(255, 255, 255, 0.08);
+            }
+            .receive-or-text {
+                font-size: 13px;
+                color: rgba(255, 255, 255, 0.5);
+            }
+            .receive-qr-area {
+                width: 100%;
+                aspect-ratio: 1;
+                max-height: 260px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                background: rgba(15, 15, 18, 0.85);
+                border: 2px solid rgba(255, 255, 255, 0.18);
+                border-radius: 14px;
+                color: rgba(255, 255, 255, 0.7);
+                font-family: inherit;
+                font-size: 15px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: background 0.2s ease, border-color 0.2s ease;
+            }
+            .receive-qr-area:hover {
+                background: rgba(20, 20, 24, 0.95);
+                border-color: rgba(168, 206, 56, 0.4);
+                color: rgba(255, 255, 255, 0.85);
+            }
+            .receive-qr-label {
+                text-align: center;
+            }
+            .receive-import-qr {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 8px;
+                width: 100%;
+                margin-top: 12px;
+                padding: 10px;
+                background: transparent;
+                border: none;
+                color: rgba(255, 255, 255, 0.55);
+                font-family: inherit;
+                font-size: 13px;
+                cursor: pointer;
+                transition: color 0.15s ease;
+            }
+            .receive-import-qr:hover {
+                color: rgba(168, 206, 56, 0.95);
+            }
+            .receive-import-icon {
+                display: inline-flex;
+                width: 18px;
+                height: 18px;
+            }
+            .receive-import-icon svg {
+                width: 18px;
+                height: 18px;
+            }
+
+            /* ============================================================
+               FULL-PAGE OVERLAY (Settings, Report-a-bug)
+               Covers the whole window when active; back arrow closes.
+               Same visual language as the main app (dark bg, white text)
+               but with its own layout (single-column, no tabs).
+               ============================================================ */
+            .app-fullpage {
+                position: fixed;
+                inset: 0;
+                background: #14141a;
+                z-index: 200; /* above modal-overlays (which use z ~1000+ typically), but modals will still show over this if opened while it's active */
+                display: none;
+                flex-direction: column;
+                padding: 44px 32px 24px;
+                overflow-y: auto;
+            }
+            .app-fullpage.active {
+                display: flex;
+            }
+            .fullpage-header {
+                display: flex;
+                align-items: center;
+                gap: 14px;
+                margin-bottom: 24px;
+                flex-shrink: 0;
+            }
+            .fullpage-back {
+                width: 36px;
+                height: 36px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                background: transparent;
+                border: none;
+                border-radius: 8px;
+                color: #ffffff;
+                cursor: pointer;
+                transition: background 0.15s ease;
+            }
+            .fullpage-back:hover {
+                background: rgba(255, 255, 255, 0.05);
+            }
+            .fullpage-back svg {
+                width: 22px;
+                height: 22px;
+            }
+            .fullpage-title {
+                font-size: 26px;
+                font-weight: 700;
+                color: #ffffff;
+                margin: 0;
+                letter-spacing: -0.3px;
+            }
+
+            /* ---- Settings-specific ---- */
+            .settings-user-card {
+                display: flex;
+                align-items: center;
+                gap: 14px;
+                padding: 12px 0 22px;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+                margin-bottom: 24px;
+            }
+            .settings-avatar {
+                width: 52px;
+                height: 52px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                background: rgba(168, 206, 56, 0.14);
+                border-radius: 50%;
+                color: rgba(168, 206, 56, 0.9);
+                flex-shrink: 0;
+            }
+            .settings-avatar svg {
+                width: 32px;
+                height: 32px;
+            }
+            .settings-user-info {
+                flex: 1;
+                min-width: 0;
+            }
+            .settings-user-name {
+                font-size: 18px;
+                font-weight: 600;
+                color: #ffffff;
+                margin-bottom: 2px;
+            }
+            .settings-user-id {
+                font-size: 13px;
+                color: rgba(255, 255, 255, 0.45);
+            }
+            .settings-signout-btn {
+                padding: 9px 22px;
+                background: transparent;
+                border: 2px solid rgba(255, 100, 100, 0.7);
+                border-radius: 10px;
+                color: rgba(255, 100, 100, 0.95);
+                font-family: inherit;
+                font-size: 13px;
+                font-weight: 700;
+                cursor: pointer;
+                transition: background 0.15s ease, border-color 0.15s ease;
+            }
+            .settings-signout-btn:hover {
+                background: rgba(255, 100, 100, 0.1);
+                border-color: rgba(255, 100, 100, 0.85);
+            }
+
+            .settings-section {
+                margin-bottom: 20px;
+            }
+            .settings-section-title {
+                font-size: 13px;
+                font-weight: 600;
+                color: rgba(255, 255, 255, 0.5);
+                letter-spacing: 0.5px;
+                margin: 0 0 8px;
+                text-transform: none;
+            }
+            .settings-row {
+                display: flex;
+                align-items: center;
+                gap: 14px;
+                width: 100%;
+                padding: 12px 10px;
+                background: transparent;
+                border: none;
+                color: #ffffff;
+                font-family: inherit;
+                font-size: 14px;
+                text-align: left;
+                cursor: pointer;
+                border-radius: 8px;
+                transition: background 0.12s ease;
+            }
+            .settings-row:hover {
+                background: rgba(255, 255, 255, 0.04);
+            }
+            .settings-row-icon {
+                width: 32px;
+                height: 32px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                background: rgba(168, 206, 56, 0.12);
+                border-radius: 8px;
+                color: rgba(168, 206, 56, 0.9);
+                flex-shrink: 0;
+            }
+            .settings-row-icon svg {
+                width: 16px;
+                height: 16px;
+            }
+            .settings-row-label {
+                flex: 1;
+                min-width: 0;
+            }
+            .settings-row-value {
+                font-size: 13px;
+                color: rgba(255, 255, 255, 0.45);
+            }
+            .settings-row-chevron {
+                color: rgba(255, 255, 255, 0.3);
+                font-size: 18px;
+                line-height: 1;
+            }
+
+            /* ---- Report a bug page ---- */
+            .bug-label {
+                display: block;
+                font-size: 14px;
+                color: rgba(255, 255, 255, 0.5);
+                margin: 14px 0 8px;
+            }
+            .bug-textarea-wrap {
+                position: relative;
+            }
+            .bug-textarea {
+                width: 100%;
+                min-height: 120px;
+                padding: 14px 16px;
+                background: rgba(20, 20, 22, 0.9);
+                border: 2px solid rgba(255, 255, 255, 0.1);
+                border-radius: 12px;
+                color: #ffffff;
+                font-family: inherit;
+                font-size: 14px;
+                resize: vertical;
+                outline: none;
+                transition: border-color 0.2s ease;
+            }
+            .bug-textarea:focus {
+                border-color: rgba(168, 206, 56, 0.5);
+            }
+            .bug-textarea::placeholder {
+                color: rgba(255, 255, 255, 0.3);
+            }
+            .bug-char-count {
+                position: absolute;
+                right: 12px;
+                bottom: 8px;
+                font-size: 12px;
+                color: rgba(255, 255, 255, 0.35);
+                pointer-events: none;
+            }
+            .bug-input {
+                width: 100%;
+                height: 46px;
+                padding: 0 16px;
+                background: rgba(20, 20, 22, 0.9);
+                border: 2px solid rgba(255, 255, 255, 0.1);
+                border-radius: 12px;
+                color: #ffffff;
+                font-family: inherit;
+                font-size: 14px;
+                outline: none;
+                transition: border-color 0.2s ease;
+            }
+            .bug-input:focus {
+                border-color: rgba(168, 206, 56, 0.5);
+            }
+            .bug-input::placeholder {
+                color: rgba(255, 255, 255, 0.3);
+            }
+            .bug-attach-row {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                margin: 24px 0;
+                padding: 12px 4px;
+            }
+            .bug-attach-info {
+                flex: 1;
+                min-width: 0;
+            }
+            .bug-attach-title {
+                font-size: 14px;
+                color: #ffffff;
+                margin-bottom: 2px;
+            }
+            .bug-attach-subtitle {
+                font-size: 12px;
+                color: rgba(255, 255, 255, 0.45);
+            }
+            .bug-attach-tags {
+                display: inline-flex;
+                gap: 6px;
+                flex-shrink: 0;
+            }
+            .bug-tag {
+                padding: 4px 10px;
+                background: rgba(40, 40, 45, 0.9);
+                border: 1px solid rgba(255, 255, 255, 0.05);
+                border-radius: 6px;
+                font-size: 11px;
+                color: rgba(255, 255, 255, 0.7);
+            }
+            .bug-toggle {
+                position: relative;
+                display: inline-block;
+                width: 44px;
+                height: 24px;
+                flex-shrink: 0;
+                cursor: pointer;
+            }
+            .bug-toggle input {
+                opacity: 0;
+                width: 0;
+                height: 0;
+            }
+            .bug-toggle-slider {
+                position: absolute;
+                inset: 0;
+                background: rgba(60, 60, 65, 0.9);
+                border-radius: 999px;
+                transition: background 0.2s ease;
+            }
+            .bug-toggle-slider::before {
+                content: '';
+                position: absolute;
+                top: 3px;
+                left: 3px;
+                width: 18px;
+                height: 18px;
+                background: #ffffff;
+                border-radius: 50%;
+                transition: transform 0.2s ease;
+            }
+            .bug-toggle input:checked + .bug-toggle-slider {
+                background: linear-gradient(135deg, #a8ce38 0%, #76bf52 100%);
+            }
+            .bug-toggle input:checked + .bug-toggle-slider::before {
+                transform: translateX(20px);
+            }
+            .bug-send-btn {
+                width: 100%;
+                height: 48px;
+                margin-top: 16px;
+                background: linear-gradient(135deg, #a8ce38 0%, #76bf52 100%);
+                border: none;
+                border-radius: 12px;
+                color: #0a1a0a;
+                font-family: inherit;
+                font-size: 15px;
+                font-weight: 700;
+                cursor: pointer;
+                transition: filter 0.15s ease;
+            }
+            .bug-send-btn:hover {
+                filter: brightness(1.08);
+            }
+            .bug-send-btn:active {
+                filter: brightness(0.95);
+            }
+
+            /* ============================================================
+               SHARE LINK MODAL (Desktop v2 restyle)
+               Existing modal restyled to match the Figma: centered layout,
+               big QR, link shown in a bordered pill, Copy Link + Done as
+               clear side-by-side buttons.
+               ============================================================ */
+            .share-link-modal {
+                padding: 32px 28px 28px;
+                text-align: center;
+                /* bg / border / blur inherited from canonical .modal rule */
+            }
+            .share-link-title {
+                font-size: 22px;
+                font-weight: 700;
+                color: #ffffff;
+                margin: 0 0 6px;
+            }
+            .share-link-subtitle {
+                font-size: 13px;
+                color: rgba(255, 255, 255, 0.5);
+                margin: 0 0 20px;
+            }
+            .share-link-qr {
+                display: block;
+                margin: 0 auto 20px;
+                border-radius: 10px;
+                background: #ffffff;
+                padding: 8px;
+            }
+            .share-link-display {
+                display: flex;
+                align-items: center;
+                /* Width capped BELOW the buttons row (actions container
+                   is 420px). Link box is narrower and centered so it
+                   sits visually inside the buttons' horizontal span. */
+                width: 100%;
+                max-width: 380px;
+                margin-left: auto;
+                margin-right: auto;
+                margin-bottom: 24px;
+                padding: 14px 20px;
+                /* NEARLY transparent — the modal's own frosted glass
+                   shows straight through. Any darker fill here would
+                   dim the modal's glass at this spot and read as black.
+                   The subtle white tint just gives the box a hair of
+                   "glass on glass" tonal separation from the modal. */
+                background: rgba(255, 255, 255, 0.04);
+                border: 2px solid rgba(168, 206, 56, 0.55);
+                border-radius: 14px;
+                color: rgba(168, 206, 56, 1);
+                font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+                font-size: 13px;
+                text-align: left;
+                overflow-wrap: anywhere;
+                /* Cap height a bit under two button widths (buttons=58px,
+                   so 2× = 116px; cap at 100px so it's visibly smaller). */
+                min-height: 72px;
+                max-height: 100px;
+                overflow-y: auto;
+            }
+            .share-link-actions {
+                display: flex;
+                gap: 14px;
+                margin-top: 8px;
+                /* Cap the pair so widening the modal doesn't stretch the
+                   buttons — the buttons keep their current chunky size,
+                   just get more empty space around them. */
+                max-width: 420px;
+                margin-left: auto;
+                margin-right: auto;
+            }
+            /* Fat iOS-style pill buttons — chunky height, generous padding,
+               soft rounded corners, bold weight. Both Copy Link (primary
+               gradient fill) and Done (outline). */
+            .share-link-copy,
+            .share-link-done {
+                flex: 1;
+                height: 58px;
+                border-radius: 16px;
+                font-family: inherit;
+                font-size: 16px;
+                font-weight: 700;
+                letter-spacing: -0.1px;
+                cursor: pointer;
+                transition: filter 0.15s ease, background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+            }
+            .share-link-copy:active,
+            .share-link-done:active {
+                transform: scale(0.98);
+            }
+            .share-link-copy {
+                background: linear-gradient(135deg, #a8ce38 0%, #6ac168 100%);
+                border: none;
+                color: #0a1a0a;
+                box-shadow: 0 6px 16px rgba(168, 206, 56, 0.25);
+            }
+            .share-link-copy:hover {
+                filter: brightness(1.08);
+            }
+            .share-link-done {
+                background: rgba(255, 255, 255, 0.04);
+                border: 2px solid rgba(168, 206, 56, 0.6);
+                color: rgba(168, 206, 56, 1);
+            }
+            .share-link-done:hover {
+                background: rgba(168, 206, 56, 0.10);
+                border-color: rgba(168, 206, 56, 0.7);
+            }
+
+            /* ============================================================
+               FILE INFO MODAL (Desktop v2, Figma screen #19)
+               Opened by the drive-card 3-dot menu → Properties. Shell
+               (width, glass, radius) comes from the canonical .modal rule;
+               only INTERNAL layout lives here.
+               ============================================================ */
+            .file-info-modal {
+                padding: 22px 28px 24px;
+                display: flex;
+                flex-direction: column;
+                gap: 20px;
+            }
+            .file-info-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+            }
+            .file-info-title {
+                margin: 0;
+                font-size: 22px;
+                font-weight: 700;
+                color: #ffffff;
+                letter-spacing: -0.2px;
+            }
+            /* Canonical app close button — same shape as .send-modal-close /
+               .qr-scanner-close (2px red outline square, red glyph). */
+            .file-info-close {
+                width: 32px;
+                height: 32px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                background: transparent;
+                border: 2px solid rgba(255, 100, 100, 0.75);
+                border-radius: 8px;
+                color: rgba(255, 100, 100, 0.95);
+                font-size: 20px;
+                font-weight: 600;
+                line-height: 1;
+                cursor: pointer;
+                transition: background 0.15s ease, border-color 0.15s ease;
+            }
+            .file-info-close:hover {
+                background: rgba(255, 100, 100, 0.12);
+                border-color: rgba(255, 100, 100, 0.9);
+            }
+            /* Hero row: big thumbnail + filename + one-line sub */
+            .file-info-hero {
+                display: flex;
+                align-items: center;
+                gap: 16px;
+            }
+            .file-info-thumb {
+                flex: 0 0 auto;
+                width: 72px;
+                height: 72px;
+                border-radius: 14px;
+                background: rgba(255, 255, 255, 0.08);
+                border: 2px solid rgba(255, 255, 255, 0.12);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: rgba(255, 255, 255, 0.85);
+                overflow: hidden;
+            }
+            .file-info-thumb svg {
+                width: 34px;
+                height: 34px;
+            }
+            .file-info-thumb img {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+            }
+            .file-info-hero-text {
+                flex: 1 1 auto;
+                min-width: 0;      /* let long names truncate */
+            }
+            .file-info-name {
+                font-size: 18px;
+                font-weight: 700;
+                color: #ffffff;
+                letter-spacing: -0.2px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .file-info-sub {
+                margin-top: 4px;
+                font-size: 13px;
+                color: rgba(255, 255, 255, 0.55);
+                font-weight: 500;
+            }
+            /* Property grid: 2 columns of label / value rows */
+            .file-info-grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 10px 24px;
+                padding: 4px 0;
+            }
+            .file-info-grid-row {
+                display: flex;
+                flex-direction: column;
+                gap: 2px;
+                padding: 8px 0;
+                border-top: 1px solid rgba(255, 255, 255, 0.08);
+            }
+            .file-info-grid-label {
+                font-size: 12px;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.6px;
+                color: rgba(255, 255, 255, 0.45);
+            }
+            .file-info-grid-value {
+                font-size: 15px;
+                font-weight: 600;
+                color: #ffffff;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            /* Share-link box (mirrors the share-link-modal treatment) */
+            .file-info-linkbox {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+            }
+            .file-info-linkbox-label {
+                font-size: 12px;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.6px;
+                color: rgba(255, 255, 255, 0.45);
+            }
+            .file-info-linkbox-row {
+                display: flex;
+                gap: 10px;
+                align-items: stretch;
+            }
+            .file-info-linkbox-value {
+                flex: 1 1 auto;
+                min-width: 0;
+                padding: 12px 16px;
+                background: rgba(255, 255, 255, 0.04);
+                border: 2px solid rgba(168, 206, 56, 0.55);
+                border-radius: 12px;
+                color: rgba(168, 206, 56, 1);
+                font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+                font-size: 12px;
+                overflow-wrap: anywhere;
+                max-height: 72px;
+                overflow-y: auto;
+            }
+            .file-info-linkbox-copy {
+                flex: 0 0 auto;
+                padding: 0 20px;
+                border: 2px solid rgba(168, 206, 56, 0.6);
+                border-radius: 12px;
+                background: rgba(255, 255, 255, 0.04);
+                color: rgba(168, 206, 56, 1);
+                font-family: inherit;
+                font-size: 14px;
+                font-weight: 700;
+                letter-spacing: -0.1px;
+                cursor: pointer;
+                transition: background 0.15s ease, border-color 0.15s ease;
+            }
+            .file-info-linkbox-copy:hover {
+                background: rgba(168, 206, 56, 0.10);
+                border-color: rgba(168, 206, 56, 0.75);
+            }
+            /* Grey out link box when there is no shareLink (download-only). */
+            .file-info-modal.no-link .file-info-linkbox {
+                display: none;
+            }
+            .file-info-actions {
+                display: flex;
+                justify-content: flex-end;
+                margin-top: 4px;
+            }
+            .file-info-done {
+                min-width: 140px;
+                height: 52px;
+                border-radius: 14px;
+                background: rgba(255, 255, 255, 0.04);
+                border: 2px solid rgba(168, 206, 56, 0.6);
+                color: rgba(168, 206, 56, 1);
+                font-family: inherit;
+                font-size: 15px;
+                font-weight: 700;
+                letter-spacing: -0.1px;
+                cursor: pointer;
+                transition: background 0.15s ease, border-color 0.15s ease;
+            }
+            .file-info-done:hover {
+                background: rgba(168, 206, 56, 0.10);
+                border-color: rgba(168, 206, 56, 0.75);
+            }
+
+            /* ============================================================
+               DOWNLOAD-COMPLETE TOAST (Desktop v2)
+               Fixed bottom-right, slides in when a download finishes.
+               Distinct visual from the general center-bottom .toast so
+               downloads always land in a predictable corner of the app.
+               ============================================================ */
+            .download-toast {
+                position: fixed;
+                right: 20px;
+                bottom: 20px;
+                display: none;
+                align-items: center;
+                gap: 14px;
+                padding: 14px 16px;
+                min-width: 300px;
+                max-width: 380px;
+                background: rgba(28, 30, 22, 0.98);
+                border: 1.5px solid rgba(168, 206, 56, 0.45);
+                border-radius: 14px;
+                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+                z-index: 250;
+                animation: download-toast-slide 0.25s ease-out;
+            }
+            .download-toast.active {
+                display: flex;
+            }
+            @keyframes download-toast-slide {
+                from { opacity: 0; transform: translateY(20px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+            .download-toast-icon {
+                width: 32px;
+                height: 32px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                background: rgba(168, 206, 56, 0.18);
+                border-radius: 50%;
+                color: rgba(168, 206, 56, 1);
+                flex-shrink: 0;
+            }
+            .download-toast-icon svg {
+                width: 18px;
+                height: 18px;
+            }
+            .download-toast-body {
+                flex: 1;
+                min-width: 0;
+            }
+            .download-toast-title {
+                font-size: 14px;
+                font-weight: 600;
+                color: #ffffff;
+                margin-bottom: 2px;
+            }
+            .download-toast-subtitle {
+                font-size: 12px;
+                color: rgba(255, 255, 255, 0.55);
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .download-toast-detail {
+                padding: 6px 12px;
+                background: transparent;
+                border: 1px solid rgba(168, 206, 56, 0.4);
+                border-radius: 8px;
+                color: rgba(168, 206, 56, 0.95);
+                font-family: inherit;
+                font-size: 12px;
+                font-weight: 600;
+                cursor: pointer;
+                flex-shrink: 0;
+                transition: background 0.15s ease, border-color 0.15s ease;
+            }
+            .download-toast-detail:hover {
+                background: rgba(168, 206, 56, 0.12);
+                border-color: rgba(168, 206, 56, 0.65);
+            }
+
+            /* Right cluster: Send / Receive / gear */
+            .top-actions {
+                display: inline-flex;
+                align-items: center;
+                gap: 10px;
+            }
+
+            /* Send + Receive — green outline pill */
+            .top-action-btn {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                padding: 9px 20px;
+                background: transparent;
+                border: 2px solid rgba(168, 206, 56, 0.8);
+                border-radius: 10px;
+                color: rgba(168, 206, 56, 1);
+                font-family: inherit;
+                font-size: 14px;
+                font-weight: 700;
+                cursor: pointer;
+                transition: background 0.2s ease, border-color 0.2s ease;
+            }
+            .top-action-btn:hover {
+                background: rgba(168, 206, 56, 0.1);
+                border-color: rgba(168, 206, 56, 0.95);
+            }
+            .top-action-btn:active {
+                background: rgba(168, 206, 56, 0.18);
+            }
+            .top-action-icon {
+                font-size: 15px;
+                line-height: 1;
+                margin-right: 2px;
+            }
+
+            /* Gear — dark filled circle */
+            .top-settings-btn {
+                width: 38px;
+                height: 38px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                background: rgba(40, 40, 44, 0.9);
+                border: 2px solid rgba(255, 255, 255, 0.1);
+                border-radius: 50%;
+                color: #ffffff;
+                cursor: pointer;
+                margin-left: 4px;
+                transition: background 0.2s ease, transform 0.15s ease;
+            }
+            .top-settings-btn:hover {
+                background: rgba(55, 55, 60, 0.95);
+            }
+            .top-settings-btn:active {
+                transform: scale(0.94);
+            }
+            .top-settings-btn svg {
+                width: 18px;
+                height: 18px;
+            }
+
+            /* ---- Search + filter row ----
+               Acts as the TOP of the drives-list container: same top of
+               the gradient (#1a1a20), rounded top corners, sits flush
+               under the tabs with no gap and flush against the list
+               below (also no gap). Search bar + list read as ONE panel. */
+            .search-toolbar {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                padding: 14px 16px;
+                flex-shrink: 0;
+                order: -9;
+                background: #1a1a20;
+                /* Only the TOP-RIGHT corner curves (per Amir's design).
+                   Top-left is flush against the active tab that's sitting
+                   on its left edge; the two bottom corners belong to the
+                   drives list below (flat, fades into black). */
+                border-radius: 0 16px 0 0;
+                margin-bottom: -12px;   /* eat the .app column gap below */
+            }
+
+            .search-input-wrap {
+                position: relative;
+                flex: 1;
+                min-width: 0;
+            }
+            .search-icon {
+                position: absolute;
+                left: 14px;
+                top: 50%;
+                transform: translateY(-50%);
+                width: 16px;
+                height: 16px;
+                color: rgba(255, 255, 255, 0.35);
+                pointer-events: none;
+            }
+            .search-input {
+                width: 100%;
+                height: 44px;
+                padding: 0 14px 0 40px;
+                background: rgba(30, 30, 34, 0.7);
+                border: 2px solid rgba(255, 255, 255, 0.08);
+                border-radius: 12px;
+                color: #ffffff;
+                font-family: inherit;
+                font-size: 14px;
+                font-weight: 500;
+                outline: none;
+                transition: border-color 0.2s ease, background 0.2s ease;
+            }
+            .search-input:focus {
+                border-color: rgba(168, 206, 56, 0.5);
+                background: rgba(35, 40, 30, 0.7);
+            }
+            .search-input::placeholder {
+                color: rgba(255, 255, 255, 0.35);
+            }
+
+            .search-toolbar-actions {
+                display: inline-flex;
+                gap: 6px;
+                flex-shrink: 0;
+            }
+            .toolbar-icon-btn {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                gap: 2px;
+                width: auto;
+                min-width: 44px;
+                height: 44px;
+                padding: 0 10px;
+                background: transparent;
+                border: 2px solid rgba(255, 255, 255, 0.12);
+                border-radius: 12px;
+                color: rgba(255, 255, 255, 0.85);
+                cursor: pointer;
+                transition: background 0.15s ease, border-color 0.15s ease;
+            }
+            .toolbar-icon-btn:hover {
+                background: rgba(255, 255, 255, 0.04);
+                border-color: rgba(255, 255, 255, 0.14);
+                color: #ffffff;
+            }
+            .toolbar-icon-btn svg {
+                width: 16px;
+                height: 16px;
+            }
+            .toolbar-caret {
+                font-size: 10px;
+                opacity: 0.7;
+            }
+        }
+        /* ============================================================
+           END: Desktop v2 shell
+           ============================================================ */
+
+        /* Draggable title bar region.
+           On desktop-UI, the drag surface is inset from the left by the
+           sidebar's width so it doesn't overlay the sidebar's top strip.
+           Without that inset, `.app-shell` (z-index: 1) traps the sidebar
+           at level 1 in body's root — so drag-region (z-index: 100) is
+           visually on top, and Electron's OS-level drag hit-test wins
+           over the sidebar buttons in the top 35px band. That made the
+           first sidebar item ("All Shares") only clickable below its
+           text. The inset simply removes the drag layer from that area,
+           so nothing overlays the sidebar's top and every button is
+           clickable edge-to-edge. Users can still drag the window from
+           the top of the main column (right of the sidebar). */
+        .drag-region {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 35px;
+            -webkit-app-region: drag;
+            z-index: 100;
+        }
+        @media (min-width: 600px) {
+            .drag-region {
+                left: 200px; /* Matches .sidebar width */
+            }
+        }
+
+        /* Header with profile icon */
+        .header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 35px;
+            display: flex;
+            align-items: center;
+            padding: 0 16px;
+            padding-left: 16px;
+            z-index: 101;
+            pointer-events: none;
+        }
+
+        .profile-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, rgba(168, 206, 56, 0.3), rgba(61, 181, 121, 0.3));
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            pointer-events: auto;
+            -webkit-app-region: no-drag;
+            transition: all 0.2s ease;
+        }
+
+        .profile-icon:hover {
+            background: linear-gradient(135deg, rgba(168, 206, 56, 0.4), rgba(61, 181, 121, 0.4));
+            transform: scale(1.05);
+        }
+
+        .profile-icon svg {
+            width: 20px;
+            height: 20px;
+            fill: rgba(255, 255, 255, 0.8);
+        }
+
+        /* Glassy utility class — app-wide iOS-frosted-glass recipe
+           (see the same values on .modal-overlay .modal). */
+        .glass {
+            background: rgba(180, 184, 195, 0.22);
+            backdrop-filter: blur(6px) saturate(150%);
+            -webkit-backdrop-filter: blur(6px) saturate(150%);
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+        }
+
+        /* Desktop v2 (Figma): iOS-inset-list style. Subtle rounded card
+           per row (very faint fill so the container gradient still
+           reads through), bumpy corners, centered in each grid column
+           with a max width. Row separators are drawn as a ::before
+           pseudo floating in the space ABOVE the card, so the line has
+           gap on both sides (card ↔ line ↔ card). */
+        body #listContainer .drive-item {
+            position: relative;               /* anchor for the separator pseudo */
+            background: transparent;          /* no card fill — the rounded shape only reveals on hover */
+            border: none;
+            border-radius: 20px;              /* bumpier iOS corners */
+            padding: 16px 16px;
+            box-shadow: none;
+            max-width: 440px;
+            margin: 0 auto;
+            gap: 14px;                        /* between thumb and content */
+        }
+        /* Bigger, chunkier iOS-style thumbnails on desktop rows. */
+        body #listContainer .drive-item .drive-item-thumb {
+            width: 56px;
+            height: 56px;
+            min-width: 56px;
+            border-radius: 12px;
+            overflow: hidden;
+            background: rgba(255, 255, 255, 0.06);
+        }
+        body #listContainer .drive-item .drive-item-thumb.is-folder,
+        body #listContainer .drive-item .drive-item-thumb.is-fileicon {
+            background: transparent;         /* let the SVG carry the color */
+        }
+        body #listContainer .drive-item .drive-item-thumb-folder {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100%;
+            color: #6ee0d3;                  /* teal folder — matches Figma */
+        }
+        body #listContainer .drive-item .drive-item-thumb-folder svg {
+            width: 88%;
+            height: 88%;
+        }
+        /* Category-tinted file-type SVG icons (photo/video/audio/doc/
+           archive/code/…). Same box as the folder icon so all thumbs
+           read at a consistent 56px size. Color is inlined via the
+           `style="color:…"` on the span; the SVG uses currentColor. */
+        body #listContainer .drive-item .drive-item-thumb-fileicon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100%;
+        }
+        body #listContainer .drive-item .drive-item-thumb-fileicon svg {
+            width: 78%;
+            height: 78%;
+        }
+        /* Bump the filename to feel bigger + bolder alongside the larger
+           thumb (iOS list-cell scale). */
+        body #listContainer .drive-item .drive-item-title {
+            font-size: 16px;
+            font-weight: 700;
+            letter-spacing: -0.1px;
+        }
+        /* Horizontal row-separator floating above each card in rows 2+.
+           Positioned in the middle of the grid's row-gap (24px), so it
+           has ~12px of clear space to the card above and ~12px to the
+           card below — no line touching the rounded card edges. */
+        body #listContainer .scroll-list-slot:nth-child(n+3) .drive-item::before {
+            content: '';
+            position: absolute;
+            top: -13px;                        /* halfway into the 24px row-gap */
+            left: 12%;
+            right: 12%;
+            height: 1px;
+            background: rgba(255, 255, 255, 0.05);
+            pointer-events: none;
+        }
+        body #listContainer .drive-item:hover {
+            background: rgba(255, 255, 255, 0.04);
+        }
+        /* The old size/fileCount meta line and right-side status pill
+           are replaced by the new inline .drive-item-status-line under
+           the title (rendered by the library, revealed below). */
+        body #listContainer .drive-item .drive-item-meta {
+            display: none;
+        }
+        body #listContainer .drive-item .drive-item-status {
+            display: none;
+        }
+        /* Status line — reveal, layout, and color by [data-status]. */
+        body #listContainer .drive-item .drive-item-status-line {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 4px;
+            font-size: 13px;
+            font-weight: 600;
+            line-height: 1.2;
+        }
+        body .drive-item-status-count {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: rgba(255, 255, 255, 0.55);
+            font-weight: 500;
+        }
+        body .drive-item-status-count-icon {
+            display: inline-flex;
+            width: 18px;
+            height: 18px;
+            color: rgba(255, 255, 255, 0.55);
+        }
+        body .drive-item-status-count-icon svg {
+            width: 100%;
+            height: 100%;
+        }
+        /* File-type prefix ("Picture", "Music", …) — same muted weight
+           as the count text, sits before the • separator. */
+        body .drive-item-status-type {
+            color: #ffffff;
+            font-weight: 600;
+        }
+        body .drive-item-status-dot {
+            color: rgba(255, 255, 255, 0.45);
+            font-weight: 700;
+            margin: 0 2px;
+        }
+        body .drive-item-status-label {
+            color: rgba(255, 255, 255, 0.55);
+        }
+        /* ─── Favorite star next to filename ────────────────────────
+           In the DOM on every row so the CSS-only toggle is instant;
+           only visible when data-fav="true". Gold fill via currentColor. */
+        body #listContainer .drive-item .drive-item-fav-star {
+            display: none;
+            width: 18px;
+            height: 18px;
+            flex-shrink: 0;
+            color: #f5c93a;                    /* gold */
+        }
+        body #listContainer .drive-item .drive-item-fav-star[data-fav="true"] {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        body #listContainer .drive-item .drive-item-fav-star svg {
+            width: 100%;
+            height: 100%;
+        }
+        /* Color mapping per [data-status]. Green = healthy/done,
+           red = broken/off, amber = in-progress, grey = paused. */
+        body .drive-item-status-line[data-status="sharing"] .drive-item-status-label,
+        body .drive-item-status-line[data-status="complete"] .drive-item-status-label {
+            color: #6ac168;                 /* pear-green */
+        }
+        body .drive-item-status-line[data-status="inactive"] .drive-item-status-label,
+        body .drive-item-status-line[data-status="error"] .drive-item-status-label,
+        body .drive-item-status-line[data-status="missing"] .drive-item-status-label {
+            color: #ff6b6b;                 /* red */
+        }
+        body .drive-item-status-line[data-status="downloading"] .drive-item-status-label,
+        body .drive-item-status-line[data-status="connecting"] .drive-item-status-label,
+        body .drive-item-status-line[data-status="sharing-progress"] .drive-item-status-label {
+            color: #f0b840;                 /* amber — mid-transfer */
+        }
+        body .drive-item-status-line[data-status="paused"] .drive-item-status-label {
+            color: rgba(255, 255, 255, 0.5);
+        }
+
+        /* ─── Desktop v2 row action buttons (Figma) ────────────────
+           Right-side per-row action, sitting between the row content
+           and the kebab. Three variants:
+             .open   — green pill,  status=complete
+             .retry  — red pill,    status=error/missing
+             .cancel — red circle,  in-progress transfers
+           Anchored via body-prefix to beat the library's runtime rules. */
+        body #listContainer .drive-item .drive-item-row-action {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            margin: 0 6px 0 8px;
+            font-family: inherit;
+            font-weight: 700;
+            letter-spacing: -0.1px;
+            cursor: pointer;
+            transition: background 0.15s ease, border-color 0.15s ease, filter 0.15s ease, transform 0.1s ease;
+        }
+        body #listContainer .drive-item .drive-item-row-action:active {
+            transform: scale(0.96);
+        }
+
+        /* OPEN — green pill (secondary style: dark fill + green outline
+           + green text, matches iOS-style outlined action). */
+        body #listContainer .drive-item .drive-item-row-action-open {
+            min-width: 82px;
+            height: 36px;
+            padding: 0 18px;
+            border-radius: 999px;
+            background: rgba(50, 70, 30, 0.35);
+            border: 2px solid rgba(168, 206, 56, 0.65);
+            color: #a8ce38;
+            font-size: 14px;
+        }
+        body #listContainer .drive-item .drive-item-row-action-open:hover {
+            background: rgba(168, 206, 56, 0.15);
+            border-color: rgba(168, 206, 56, 0.85);
+        }
+
+        /* RETRY — red filled pill (destructive-solid: red bg + white text).
+           Draws the eye harder than Open because a failed transfer is a
+           call-to-action, not a completed one. */
+        body #listContainer .drive-item .drive-item-row-action-retry {
+            min-width: 82px;
+            height: 36px;
+            padding: 0 18px;
+            border-radius: 999px;
+            background: #ef4a5f;
+            border: 2px solid #ef4a5f;
+            color: #ffffff;
+            font-size: 14px;
+        }
+        body #listContainer .drive-item .drive-item-row-action-retry:hover {
+            filter: brightness(1.08);
+        }
+
+        /* CANCEL X — red outlined circle. Matches the canonical modal
+           close-button treatment (2px red border + red glyph) so "close /
+           cancel / dismiss" reads consistently across the app. */
+        body #listContainer .drive-item .drive-item-row-action-cancel {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: transparent;
+            border: 2px solid rgba(255, 100, 100, 0.75);
+            color: rgba(255, 100, 100, 0.95);
+            font-size: 20px;
+            font-weight: 600;
+            line-height: 1;
+        }
+        body #listContainer .drive-item .drive-item-row-action-cancel:hover {
+            background: rgba(255, 100, 100, 0.12);
+            border-color: rgba(255, 100, 100, 0.9);
+        }
+
+        /* ─── Desktop v2: 3-dot context menu (Figma screen #18) ──────────
+           The drive-item library injects its own menu styles at runtime,
+           AFTER this <style> block. Prefix with `body ` to lift specificity
+           above the library and win the cascade. Same trick the confirm-
+           dialog overrides below use. Mobile keeps the library defaults. */
+        @media (min-width: 600px) {
+            body .drive-item-menu {
+                min-width: 220px;
+                margin-top: 8px;
+                padding: 6px;
+                /* App-wide iOS-frosted-glass recipe (Amir's "best glass by
+                   far" — the reference implementation the rest of the app
+                   was aligned to). Denser tint or heavier blur erases
+                   shapes behind into flat grey; do not drift from these
+                   values. */
+                background: rgba(180, 184, 195, 0.22);
+                backdrop-filter: blur(6px) saturate(150%);
+                -webkit-backdrop-filter: blur(6px) saturate(150%);
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-radius: 14px;
+                box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+                /* iOS-style open animation — anchor to top-right (the
+                   kebab button), settle with a subtle spring. Overrides
+                   the library's default 0.15s linear transitions. */
+                transform-origin: top right;
+                transform: translateY(-6px) scale(0.92);
+                opacity: 0;
+                transition:
+                    opacity 0.18s ease-out,
+                    transform 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+                    visibility 0.22s;
+            }
+            body .drive-item-menu.open {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+            /* Menu items slide-in staggered with a soft fade — light
+               polish that hints at iOS. CSS-only (no JS): each item
+               plays the SAME animation, but with its own delay based
+               on structural position via :nth-child. Items always
+               animate on menu open because `.open` re-triggers the
+               animation-name assignment via specificity. */
+            @keyframes drive-item-menu-item-in {
+                from {
+                    opacity: 0;
+                    transform: translateY(-4px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+            }
+            body .drive-item-menu.open .drive-item-menu-item,
+            body .drive-item-menu.open .drive-item-menu-divider {
+                animation: drive-item-menu-item-in 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
+            }
+            body .drive-item-menu.open > :nth-child(1) { animation-delay: 0.02s; }
+            body .drive-item-menu.open > :nth-child(2) { animation-delay: 0.04s; }
+            body .drive-item-menu.open > :nth-child(3) { animation-delay: 0.06s; }
+            body .drive-item-menu.open > :nth-child(4) { animation-delay: 0.08s; }
+            body .drive-item-menu.open > :nth-child(5) { animation-delay: 0.10s; }
+            body .drive-item-menu.open > :nth-child(6) { animation-delay: 0.12s; }
+            body .drive-item-menu.open > :nth-child(7) { animation-delay: 0.14s; }
+            body .drive-item-menu.open > :nth-child(8) { animation-delay: 0.16s; }
+            body .drive-item-menu.open > :nth-child(9) { animation-delay: 0.18s; }
+            body .drive-item-menu.open > :nth-child(10) { animation-delay: 0.20s; }
+            body .drive-item-menu-item {
+                padding: 11px 14px;
+                border-radius: 9px;
+                color: #ffffff;
+                font-size: 15px;
+                font-weight: 600;
+                letter-spacing: -0.1px;
+            }
+            body .drive-item-menu-item:hover {
+                background: rgba(255, 255, 255, 0.13);
+            }
+            body .drive-item-menu-item.danger {
+                color: #ff6b6b;
+            }
+            body .drive-item-menu-item.danger:hover {
+                background: rgba(255, 107, 107, 0.16);
+                color: #ff8585;
+            }
+            body .drive-item-menu-divider {
+                height: 1px;
+                margin: 6px 8px;
+                background: rgba(255, 255, 255, 0.14);
+            }
+            /* Kebab button itself — bump contrast a touch so it reads on the
+               dark drive-card background without hover. */
+            body .drive-item-menu-btn {
+                opacity: 0.7;
+            }
+            body .drive-item-menu-btn:hover {
+                opacity: 1;
+                background: rgba(255, 255, 255, 0.12);
+            }
+        }
+
+        /* SHARE button rendered inside the drop-zone (desktop Share only).
+           Anchored to bottom-LEFT; layered on top of the drop-zone's text
+           content (z-index ensures it sits above the centered hint). */
+        .drop-zone-share-btn {
+            display: none;
+            position: absolute;
+            bottom: 12px;
+            left: 12px;
+            flex: 0 0 auto;
+            min-width: 200px;
+            z-index: 3;
+        }
+
+        /* DOWNLOAD button rendered inside the link-input panel (desktop
+           Receive only). Same pattern as .drop-zone-share-btn — absolute
+           bottom-right, layered above the input. */
+        .link-input-download-btn {
+            display: none;
+            position: absolute;
+            bottom: 12px;
+            right: 12px;
+            flex: 0 0 auto;
+            min-width: 200px;
+            z-index: 3;
+        }
+
+        /* Compact Drop Zone */
+        .drop-zone {
+            flex-shrink: 0;
+            height: 100px;
+            border-radius: 16px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .drop-zone::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: 16px;
+            background: linear-gradient(
+                135deg,
+                rgba(168, 206, 56, 0.05) 0%,
+                rgba(61, 181, 121, 0.05) 100%
+            );
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .drop-zone:hover::before,
+        .drop-zone.drag-over::before {
+            opacity: 1;
+        }
+
+        .drop-zone.drag-over {
+            border-color: rgba(168, 206, 56, 0.5);
+            transform: scale(1.01);
+        }
+
+        .drop-zone.has-files {
+            border-color: rgba(118, 191, 82, 0.4);
+        }
+
+        .drop-zone.has-files::before {
+            opacity: 1;
+            background: linear-gradient(
+                135deg,
+                rgba(118, 191, 82, 0.1) 0%,
+                rgba(61, 181, 121, 0.1) 100%
+            );
+        }
+
+        .drop-content {
+            text-align: center;
+            z-index: 1;
+        }
+
+        .drop-icon {
+            font-size: 28px;
+            margin-bottom: 6px;
+            opacity: 0.9;
+        }
+
+        .drop-text {
+            font-size: 13px;
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        .drop-hint {
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.4);
+            margin-top: 2px;
+        }
+
+        /* File Preview (compact) */
+        .file-preview {
+            display: none;
+            text-align: center;
+            z-index: 1;
+        }
+
+        .file-preview.active {
+            display: block;
+        }
+
+        .file-icon-large {
+            font-size: 32px;
+            margin-bottom: 4px;
+        }
+
+        .file-info {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .file-name {
+            font-size: 13px;
+            font-weight: 600;
+            color: #fff;
+            max-width: 180px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .file-size {
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.5);
+        }
+
+        .clear-btn {
+            background: rgba(70, 70, 70, 0.8);
+            border: none;
+            border-radius: 6px;
+            padding: 4px 10px;
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 11px;
+            cursor: pointer;
+            margin-top: 6px;
+            transition: all 0.2s ease;
+        }
+
+        .clear-btn:hover {
+            background: rgba(255, 255, 255, 0.15);
+            color: #fff;
+        }
+
+        /* Tab Bar */
+        .tab-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 4px;
+            flex-shrink: 0;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 4px;
+        }
+
+        .tab {
+            background: transparent;
+            border: none;
+            color: rgba(255, 255, 255, 0.4);
+            font-size: 13px;
+            font-weight: 600;
+            padding: 8px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .tab:hover {
+            color: rgba(255, 255, 255, 0.7);
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .tab.active {
+            color: #fff;
+            background: rgba(70, 70, 70, 0.8);
+        }
+
+        /* List menu button (3 dots) */
+        .list-menu-container {
+            position: relative;
+            /* Stays anchored to the right of the tab bar even when the tabs
+               are hidden (desktop-UI). Avoids the "sucked left" effect that
+               flex space-between gives a lone child. */
+            margin-left: auto;
+        }
+
+        .list-menu-btn {
+            width: 32px;
+            height: 32px;
+            border: none;
+            background: transparent;
+            border-radius: 6px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: rgba(255, 255, 255, 0.5);
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .list-menu-btn:hover {
+            background: rgba(70, 70, 70, 0.8);
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .list-menu-dots {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+
+        .list-menu-dots span {
+            width: 4px;
+            height: 4px;
+            background: currentColor;
+            border-radius: 50%;
+        }
+
+        /* List menu dropdown */
+        .list-menu-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            margin-top: 4px;
+            min-width: 180px;
+            /* App-wide iOS-frosted-glass — same recipe as .modal / .glass. */
+            background: rgba(180, 184, 195, 0.22);
+            backdrop-filter: blur(6px) saturate(150%);
+            -webkit-backdrop-filter: blur(6px) saturate(150%);
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            border-radius: 10px;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+            overflow: visible; /* Allow submenu to overflow */
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(-8px) scale(0.95);
+            transform-origin: top right;
+            transition: opacity 0.15s, transform 0.15s, visibility 0.15s;
+            z-index: 2000;
+        }
+
+        .list-menu-dropdown.open {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0) scale(1);
+        }
+
+        /* Elevate entire menu container when dropdown is open */
+        .list-menu-container.menu-open {
+            z-index: 3000;
+        }
+
+        .list-menu-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            padding: 12px 16px;
+            border: none;
+            background: transparent;
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 13px;
+            text-align: left;
+            cursor: pointer;
+            transition: background 0.1s;
+        }
+
+        .list-menu-item:hover {
+            background: rgba(70, 70, 70, 0.8);
+        }
+
+        .list-menu-item-icon {
+            width: 18px;
+            text-align: center;
+            opacity: 0.7;
+        }
+
+        .list-menu-divider {
+            height: 1px;
+            background: rgba(70, 70, 70, 0.8);
+            margin: 4px 0;
+        }
+
+        /* Sort submenu item with arrow */
+        .list-menu-item.has-submenu {
+            justify-content: space-between;
+        }
+
+        .list-menu-item .submenu-arrow {
+            opacity: 0.5;
+            font-size: 10px;
+        }
+
+        .list-menu-item .sort-indicator {
+            font-size: 10px;
+            opacity: 0.6;
+            margin-left: 4px;
+        }
+
+        /* Submenu - needs to escape parent and be above everything */
+        .list-submenu {
+            position: fixed; /* Fixed to escape any stacking context */
+            min-width: 160px;
+            /* App-wide iOS-frosted-glass — same recipe as .modal / .glass. */
+            background: rgba(180, 184, 195, 0.22);
+            backdrop-filter: blur(6px) saturate(150%);
+            -webkit-backdrop-filter: blur(6px) saturate(150%);
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            border-radius: 10px;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+            overflow: hidden;
+            opacity: 0;
+            visibility: hidden;
+            transform: scale(0.95);
+            transform-origin: left top;
+            transition: opacity 0.15s, transform 0.15s, visibility 0.15s;
+            z-index: 4000; /* Above everything */
+        }
+
+        .list-submenu.open {
+            opacity: 1;
+            visibility: visible;
+            transform: scale(1);
+        }
+
+        /* When flipped to show on left side */
+        .list-submenu.flip-left {
+            transform-origin: right top;
+        }
+
+        .list-submenu-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            width: 100%;
+            padding: 10px 14px;
+            border: none;
+            background: transparent;
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 13px;
+            text-align: left;
+            cursor: pointer;
+            transition: background 0.1s;
+        }
+
+        .list-submenu-item:hover {
+            background: rgba(70, 70, 70, 0.8);
+        }
+
+        .list-submenu-item.active {
+            color: #a8ce38;
+        }
+
+        .list-submenu-item .sort-arrow {
+            font-size: 11px;
+            opacity: 0.8;
+        }
+
+        /* Reorder mode - animated menu button */
+        @keyframes menu-dot-wiggle-outer {
+            0%, 100% { transform: translateX(-0.7px); }
+            50% { transform: translateX(0.7px); }
+        }
+
+        @keyframes menu-dot-wiggle-middle {
+            0%, 100% { transform: translateX(0.7px); }
+            50% { transform: translateX(-0.7px); }
+        }
+
+        @keyframes menu-brightness-pulse {
+            0%, 100% { opacity: 0.9; }
+            50% { opacity: 1.0; }
+        }
+
+        .list-menu-btn.reorder-active {
+            background: rgba(168, 206, 56, 0.25);
+            color: rgba(255, 255, 255, 0.95);
+            animation: menu-brightness-pulse 2s ease-in-out infinite;
+        }
+
+        .list-menu-btn.reorder-active:hover {
+            background: rgba(168, 206, 56, 0.35);
+        }
+
+        .list-menu-btn.reorder-active .list-menu-dots span:nth-child(1) {
+            animation: menu-dot-wiggle-outer 0.5s ease-in-out infinite;
+        }
+
+        .list-menu-btn.reorder-active .list-menu-dots span:nth-child(2) {
+            animation: menu-dot-wiggle-middle 0.5s ease-in-out infinite;
+        }
+
+        .list-menu-btn.reorder-active .list-menu-dots span:nth-child(3) {
+            animation: menu-dot-wiggle-outer 0.5s ease-in-out infinite;
+            animation-delay: -0.08s;
+        }
+
+        /* Confirm Dialog */
+        .confirm-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+        }
+
+        .confirm-overlay.active {
+            display: flex;
+        }
+
+        .confirm-dialog {
+            /* App-wide iOS-frosted-glass — same recipe as .modal / .glass. */
+            background: rgba(180, 184, 195, 0.22);
+            backdrop-filter: blur(6px) saturate(150%);
+            -webkit-backdrop-filter: blur(6px) saturate(150%);
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+            max-width: 320px;
+            width: 90%;
+            min-width: 0; /* let max-width win over a long unbreakable filename */
+            /* Outer drop shadow removed for consistency with the v2
+               canonical "no ambient blur around dialogs" rule. */
+        }
+
+        .confirm-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            overflow-wrap: anywhere;
+        }
+
+        .confirm-message {
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.7);
+            line-height: 1.5;
+            margin-bottom: 20px;
+            overflow-wrap: anywhere; /* wrap mid-string for long filenames */
+            max-height: 50vh;
+            overflow-y: auto;
+        }
+
+        /* Override drive-item lib's confirm dialog so a long filename can't
+           push it past the app's width. The library styles get injected at
+           runtime (after this block), so we use `body .…` to bump specificity
+           and beat the cascade. */
+        body .drive-item-confirm {
+            max-width: min(340px, calc(100vw - 32px));
+            min-width: 0;
+            box-sizing: border-box;
+        }
+
+        body .drive-item-confirm-title,
+        body .drive-item-confirm-message {
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
+        body .drive-item-confirm-message {
+            max-height: 50vh;
+            overflow-y: auto;
+        }
+
+        .confirm-buttons {
+            display: flex;
+            gap: 10px;
+        }
+
+        .confirm-btn {
+            flex: 1;
+            padding: 12px 16px;
+            border: none;
+            border-radius: 10px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .confirm-btn.secondary {
+            background: rgba(70, 70, 70, 0.8);
+            color: rgba(255, 255, 255, 0.9);
+        }
+
+        .confirm-btn.secondary:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .confirm-btn.primary {
+            background: linear-gradient(135deg, #a8ce38 0%, #76bf52 100%);
+            color: #0a1a0a;
+        }
+
+        .confirm-btn.primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(168, 206, 56, 0.3);
+        }
+
+        .confirm-btn.danger {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+
+        .confirm-btn.danger:hover {
+            background: rgba(239, 68, 68, 0.3);
+        }
+
+        /* ScrollList Container */
+        /* 
+         * STACKING CONTEXT WARNING: Do NOT add z-index here!
+         * Adding z-index creates a new stacking context that traps all child
+         * z-indices. Menus inside would be unable to layer above elements
+         * outside this container (like backdrops). See ARCHITECTURE.md.
+         */
+        .list-container {
+            flex: 1;
+            border-radius: 16px;
+            overflow: hidden;
+            min-height: 0;
+            position: relative;
+            /* No z-index - menus handle their own stacking */
+        }
+
+        /* Link Input */
+        .link-input-container {
+            flex-shrink: 0;
+            position: relative;
+        }
+
+        .link-input {
+            width: 100%;
+            background: rgba(50, 50, 50, 0.9);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 12px 44px 12px 14px;
+            font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+            font-size: 12px;
+            color: #fff;
+            transition: all 0.2s ease;
+        }
+
+        .link-input:focus {
+            outline: none;
+            border-color: rgba(168, 206, 56, 0.5);
+            background: rgba(55, 55, 55, 0.9);
+        }
+
+        .link-input::placeholder {
+            color: rgba(255, 255, 255, 0.3);
+        }
+
+        .qr-upload-btn {
+            position: absolute;
+            right: 6px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            color: rgba(255, 255, 255, 0.5);
+            transition: background 0.15s ease, color 0.15s ease;
+            padding: 0;
+        }
+
+        .qr-upload-btn:hover {
+            background: rgba(55, 55, 55, 0.9);
+            color: rgba(255, 255, 255, 0.9);
+        }
+
+        .qr-upload-btn:active {
+            background: rgba(40, 40, 40, 0.7);
+        }
+
+        .qr-upload-btn svg {
+            width: 18px;
+            height: 18px;
+        }
+
+        .link-input.flash {
+            animation: inputFlash 0.5s ease;
+        }
+
+        @keyframes inputFlash {
+            0%, 100% { 
+                border-color: rgba(255, 255, 255, 0.1);
+                background: rgba(50, 50, 50, 0.9);
+            }
+            50% { 
+                border-color: rgba(168, 206, 56, 0.8);
+                background: rgba(168, 206, 56, 0.15);
+            }
+        }
+
+        /* Action Buttons */
+        .actions {
+            display: flex;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+
+        .action-btn {
+            flex: 1;
+            border-radius: 14px;
+            padding: 14px 20px;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            border: none;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .action-btn.share {
+            background: linear-gradient(135deg, #a8ce38 0%, #76bf52 100%);
+            color: #0a1a0a;
+            box-shadow: 
+                0 4px 16px rgba(168, 206, 56, 0.3),
+                inset 0 1px 0 rgba(255, 255, 255, 0.2);
+        }
+
+        .action-btn.share:hover {
+            transform: translateY(-2px);
+            box-shadow: 
+                0 6px 24px rgba(168, 206, 56, 0.4),
+                inset 0 1px 0 rgba(255, 255, 255, 0.2);
+        }
+
+        .action-btn.share:disabled {
+            background: linear-gradient(135deg, #4a5a2a 0%, #3a4a2a 100%);
+            color: rgba(255, 255, 255, 0.4);
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        /* "Files ready to share" glow — two quick left-to-right sweeps
+           every 2s. Toggled via the .is-ready class from renderer.js when
+           activeFiles.length > 0 and the button isn't already busy. */
+        .action-btn.share.is-ready {
+            position: relative;
+            overflow: hidden;
+            isolation: isolate;
+        }
+
+        .action-btn.share.is-ready::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 0;
+            width: 45%;
+            background: linear-gradient(
+                100deg,
+                transparent 0%,
+                rgba(255, 255, 255, 0.4) 45%,
+                rgba(255, 255, 255, 0.55) 50%,
+                rgba(255, 255, 255, 0.4) 55%,
+                transparent 100%
+            );
+            transform: translateX(-220%);
+            animation: share-ready-glow 2s ease-in-out infinite;
+            pointer-events: none;
+        }
+
+        @keyframes share-ready-glow {
+            0%        { transform: translateX(-220%); opacity: 1; }
+            18%       { transform: translateX(220%);  opacity: 1; }
+            18.5%     { transform: translateX(-220%); opacity: 0; }
+            19%       { transform: translateX(-220%); opacity: 1; }
+            37%       { transform: translateX(220%);  opacity: 1; }
+            37.5%, 100% { transform: translateX(220%); opacity: 0; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .action-btn.share.is-ready::before {
+                animation: none;
+                opacity: 0;
+            }
+        }
+
+        .action-btn.download {
+            background: rgba(55, 55, 55, 0.9);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: rgba(255, 255, 255, 0.9);
+            box-shadow: 
+                0 4px 16px rgba(0, 0, 0, 0.2),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        }
+
+        .action-btn.download:hover {
+            background: rgba(40, 40, 40, 0.7);
+            transform: translateY(-2px);
+            box-shadow:
+                0 6px 24px rgba(0, 0, 0, 0.25),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        }
+
+        /* Disabled — no link in the input yet. Mirrors SHARE's disabled
+           treatment so both buttons read as locked the same way. */
+        .action-btn.download:disabled {
+            background: rgba(40, 40, 40, 0.35);
+            color: rgba(255, 255, 255, 0.35);
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .action-btn.download:disabled:hover {
+            background: rgba(40, 40, 40, 0.35);
+            transform: none;
+            box-shadow: none;
+        }
+
+        /* Toast Notifications */
+        .toast {
+            position: fixed;
+            bottom: 100px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            /* App-wide iOS-frosted-glass — same recipe as .modal / .glass. */
+            background: rgba(180, 184, 195, 0.22);
+            backdrop-filter: blur(6px) saturate(150%);
+            -webkit-backdrop-filter: blur(6px) saturate(150%);
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            border-radius: 12px;
+            padding: 10px 16px 10px 12px;
+            font-size: 13px;
+            color: #fff;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+            opacity: 0;
+            transition: all 0.3s ease;
+            z-index: 1000;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .toast.visible {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        .toast.success {
+            border-color: rgba(118, 191, 82, 0.3);
+        }
+
+        .toast.error {
+            border-color: rgba(244, 67, 54, 0.3);
+        }
+
+        .toast-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+        }
+
+        .toast.success .toast-icon {
+            background: rgba(168, 206, 56, 0.18);
+            color: #a8ce38;
+        }
+
+        .toast.error .toast-icon {
+            background: rgba(244, 67, 54, 0.18);
+            color: #f47466;
+        }
+
+        .toast-icon svg {
+            width: 12px;
+            height: 12px;
+        }
+
+        .toast-message {
+            line-height: 1.3;
+        }
+
+        /* Share Modal */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            /* No backdrop-filter here — nesting a blur on the overlay
+               AND on the modal cancels the modal's glass effect. And
+               no dark dim — we want the app content around the modal
+               to stay visible. Desktop @media may lighten this further. */
+            background: transparent;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal {
+            width: 100%;
+            max-width: 320px;
+            border-radius: 20px;
+            padding: 20px;
+            /* App-wide iOS-frosted-glass — same recipe as the desktop
+               .modal-overlay .modal / .glass / dropdowns. Mobile base
+               keeps identical treatment for consistency. */
+            background: rgba(180, 184, 195, 0.22);
+            backdrop-filter: blur(6px) saturate(150%);
+            -webkit-backdrop-filter: blur(6px) saturate(150%);
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+        }
+
+        .modal-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 6px;
+        }
+
+        .modal-subtitle {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.5);
+            margin-bottom: 16px;
+        }
+
+        .link-display {
+            background: rgba(10, 10, 10, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            padding: 12px;
+            font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+            font-size: 10px;
+            color: #a8ce38;
+            word-break: break-all;
+            line-height: 1.5;
+            margin-bottom: 12px;
+            max-height: 80px;
+            overflow-y: auto;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .modal-btn {
+            flex: 1;
+            padding: 10px 14px;
+            border-radius: 10px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: none;
+        }
+
+        .modal-btn.primary {
+            background: linear-gradient(135deg, #a8ce38 0%, #76bf52 100%);
+            color: #0a1a0a;
+        }
+
+        .modal-btn.primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(168, 206, 56, 0.3);
+        }
+
+        .modal-btn.secondary {
+            background: rgba(55, 55, 55, 0.9);
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .modal-btn.secondary:hover {
+            background: rgba(40, 40, 40, 0.7);
+        }
+
+        /* Reset Notice Modal — one-time playful apology after the
+           persistence-bug fix. Safe to remove with its HTML once retired. */
+        .reset-notice-modal {
+            max-width: 360px;
+        }
+
+        .reset-notice-body {
+            font-size: 13px;
+            line-height: 1.55;
+            color: rgba(255, 255, 255, 0.78);
+            margin: 6px 0 16px;
+        }
+
+        .reset-notice-body strong {
+            color: #fff;
+            font-weight: 600;
+        }
+
+        /* QR Scanner Modal */
+        .qr-scanner-modal {
+            max-width: 380px;
+            position: relative;
+        }
+
+        /* Canonical app close button — 2px red outline square with a red
+           glyph. Same shape as .send-modal-close so every modal in the app
+           gets the same visual affordance for "close". Positioned absolute
+           at the modal's top-right corner. */
+        .qr-scanner-close {
+            position: absolute;
+            top: 14px;
+            right: 14px;
+            width: 32px;
+            height: 32px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: 2px solid rgba(255, 100, 100, 0.75);
+            border-radius: 8px;
+            color: rgba(255, 100, 100, 0.95);
+            font-size: 20px;
+            font-weight: 600;
+            line-height: 1;
+            cursor: pointer;
+            transition: background 0.15s ease, border-color 0.15s ease;
+        }
+
+        .qr-scanner-close:hover {
+            background: rgba(255, 100, 100, 0.12);
+            border-color: rgba(255, 100, 100, 0.9);
+        }
+
+        .qr-scanner-stage {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 1;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            margin: 14px 0 12px;
+        }
+
+        .qr-scanner-video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .qr-scanner-frame {
+            position: absolute;
+            inset: 16%;
+            border: 2px solid rgba(168, 206, 56, 0.7);
+            border-radius: 12px;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.25) inset;
+            pointer-events: none;
+        }
+
+        .qr-scanner-status {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 13px;
+            text-align: center;
+            padding: 16px;
+            background: rgba(0, 0, 0, 0.4);
+        }
+
+        .qr-scanner-status[hidden] {
+            display: none !important;
+        }
+
+        /* Custom camera dropdown — replaces native <select> for theme consistency */
+        .qr-camera-dropdown {
+            position: relative;
+            margin-bottom: 8px;
+        }
+
+        .qr-camera-dropdown[hidden] {
+            display: none !important;
+        }
+
+        .qr-camera-trigger {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: rgba(50, 50, 50, 0.9);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            padding: 10px 12px;
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 12px;
+            font-family: inherit;
+            cursor: pointer;
+            transition: background 0.15s ease, border-color 0.15s ease;
+        }
+
+        .qr-camera-trigger:hover {
+            background: rgba(255, 255, 255, 0.09);
+        }
+
+        .qr-camera-dropdown.is-open .qr-camera-trigger {
+            background: rgba(70, 70, 70, 0.8);
+            border-color: rgba(168, 206, 56, 0.4);
+        }
+
+        .qr-camera-trigger-icon {
+            width: 16px;
+            height: 16px;
+            flex-shrink: 0;
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .qr-camera-trigger-label {
+            flex: 1;
+            text-align: left;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .qr-camera-trigger-chevron {
+            width: 14px;
+            height: 14px;
+            flex-shrink: 0;
+            color: rgba(255, 255, 255, 0.5);
+            transition: transform 0.15s ease, color 0.15s ease;
+        }
+
+        .qr-camera-dropdown.is-open .qr-camera-trigger-chevron {
+            transform: rotate(180deg);
+            color: rgba(168, 206, 56, 0.9);
+        }
+
+        .qr-camera-panel {
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: calc(100% + 6px);
+            /* App-wide iOS-frosted-glass — same recipe as .modal / .glass. */
+            background: rgba(180, 184, 195, 0.22);
+            backdrop-filter: blur(6px) saturate(150%);
+            -webkit-backdrop-filter: blur(6px) saturate(150%);
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            border-radius: 12px;
+            padding: 6px;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+            opacity: 0;
+            visibility: hidden;
+            transform: scale(0.96) translateY(-4px);
+            transform-origin: top center;
+            transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s ease;
+            z-index: 10;
+        }
+
+        .qr-camera-dropdown.is-open .qr-camera-panel {
+            opacity: 1;
+            visibility: visible;
+            transform: scale(1) translateY(0);
+        }
+
+        .qr-camera-item {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: transparent;
+            border: none;
+            border-radius: 8px;
+            padding: 9px 10px;
+            color: rgba(255, 255, 255, 0.85);
+            font-size: 12px;
+            font-family: inherit;
+            text-align: left;
+            cursor: pointer;
+            transition: background 0.12s ease, color 0.12s ease;
+        }
+
+        .qr-camera-item:hover {
+            background: rgba(50, 50, 50, 0.9);
+            color: #fff;
+        }
+
+        .qr-camera-item.is-active {
+            color: #a8ce38;
+            background: rgba(168, 206, 56, 0.08);
+        }
+
+        .qr-camera-item-label {
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .qr-camera-item-check {
+            width: 14px;
+            height: 14px;
+            flex-shrink: 0;
+            opacity: 0;
+            transition: opacity 0.12s ease;
+        }
+
+        .qr-camera-item.is-active .qr-camera-item-check {
+            opacity: 1;
+        }
+
+        .qr-pick-file-btn {
+            width: 100%;
+            padding: 10px 14px;
+            background: rgba(55, 55, 55, 0.9);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            color: rgba(255, 255, 255, 0.85);
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .qr-pick-file-btn:hover {
+            background: rgba(40, 40, 40, 0.7);
+            color: #fff;
+        }
+
+        /* Empty state for the share-history list — adds a pear sticker
+           above the message and centers everything in the box. Overrides
+           the ScrollList library's defaults via #id specificity, and
+           overlays the wrapper so the always-100%-height .scroll-list
+           doesn't push us out of view. */
+        #listContainer .scroll-list-empty {
+            display: none;
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 12.5px;
+            line-height: 1.45;
+            letter-spacing: 0.1px;
+            text-align: center;
+            padding: 28px 20px;
+        }
+
+        #listContainer .scroll-list-empty.visible {
+            display: flex;
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            pointer-events: none;
+        }
+
+        #listContainer .scroll-list-empty::before {
+            content: '🍐';
+            display: block;
+            font-size: 36px;
+            line-height: 1;
+            opacity: 0.7;
+            filter: drop-shadow(0 2px 8px rgba(168, 206, 56, 0.15));
+        }
+
+        /* ============================================================
+           User-initiated delete with 5s undo window.
+           Slot content is dimmed; a circular timer button replaces
+           the drive's right-side menu. Tap the button → cancel timer
+           → drive restored. Timer runs out → real delete fires.
+           ============================================================ */
+        /* Countdown — dim + soft blur so the undo control reads as the
+           focal point of the slot. */
+        .scroll-list-slot.is-pending-delete > *:not(.drive-delete-countdown) {
+            opacity: 0.5;
+            filter: blur(1.5px);
+            transition: opacity 0.18s ease, filter 0.25s ease;
+            pointer-events: none;
+        }
+
+        /* Final state — heavier blur once the timer hits 0, "Deleting…"
+           pill is now the primary status. */
+        .scroll-list-slot.is-deleting-now > *:not(.drive-delete-countdown) {
+            opacity: 0.4;
+            filter: blur(3.5px);
+        }
+
+        .drive-delete-countdown {
+            position: absolute;
+            top: 50%;
+            right: 12px;
+            transform: translateY(-50%);
+            z-index: 4;
+            pointer-events: auto;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            animation: drive-delete-fade-in 0.18s ease-out;
+        }
+
+        /* The timer circle is non-interactive — just shows the countdown */
+        .drive-undo-timer {
+            position: relative;
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(20, 20, 24, 0.6);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            color: #fff;
+        }
+
+        /* Sibling "Undo" pill — the actual click target */
+        .drive-undo-btn {
+            border: none;
+            background: rgba(168, 206, 56, 0.16);
+            color: rgba(168, 206, 56, 0.95);
+            border-radius: 14px;
+            padding: 6px 12px;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            cursor: pointer;
+            transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
+            font-family: inherit;
+        }
+
+        .drive-undo-btn:hover {
+            background: rgba(168, 206, 56, 0.26);
+            transform: translateY(-1px);
+        }
+
+        .drive-undo-btn:disabled {
+            cursor: default;
+            background: rgba(255, 255, 255, 0.06);
+            color: rgba(255, 255, 255, 0.35);
+            transform: none;
+        }
+
+        /* Final state — timer has run out. Hide the circle and bump the
+           "Deleting…" text so it reads as the primary status. */
+        .drive-delete-countdown.is-final .drive-undo-timer {
+            display: none;
+        }
+
+        .drive-delete-countdown.is-final .drive-undo-btn {
+            font-size: 13px;
+            font-weight: 600;
+            padding: 8px 16px;
+            letter-spacing: 0.2px;
+        }
+
+        .drive-undo-ring {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            transform: rotate(-90deg);
+            overflow: visible;
+        }
+
+        .drive-undo-ring-bg {
+            fill: none;
+            stroke: rgba(255, 255, 255, 0.15);
+            stroke-width: 2.5;
+        }
+
+        .drive-undo-ring-fg {
+            fill: none;
+            stroke: rgba(168, 206, 56, 0.95);
+            stroke-width: 2.5;
+            stroke-dasharray: 100 100;
+            stroke-dashoffset: 0;
+            stroke-linecap: round;
+        }
+
+        .drive-undo-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: rgba(255, 255, 255, 0.95);
+            font-variant-numeric: tabular-nums;
+            z-index: 1;
+            pointer-events: none;
+            line-height: 1;
+        }
+
+        .drive-undo-label.is-final {
+            font-size: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        @keyframes drive-delete-fade-in {
+            from { opacity: 0; transform: translateY(-50%) scale(0.85); }
+            to { opacity: 1; transform: translateY(-50%) scale(1); }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .drive-delete-countdown {
+                animation: none;
+            }
+            .drive-undo-ring-fg {
+                transition: none;
+            }
+        }
+
+        /* "Deleting…" overlay shown on a drive slot while the backend
+           removes it. The drive's existing content is dimmed underneath. */
+        .scroll-list-slot.is-deleting > *:not(.drive-deleting-overlay) {
+            opacity: 0.32;
+            filter: blur(1px);
+            transition: opacity 0.18s ease, filter 0.18s ease;
+            pointer-events: none;
+        }
+
+        .drive-deleting-overlay {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            color: rgba(255, 255, 255, 0.92);
+            font-size: 13px;
+            font-weight: 500;
+            letter-spacing: 0.2px;
+            background: rgba(20, 20, 24, 0.45);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border-radius: 12px;
+            z-index: 3;
+            pointer-events: auto;
+            animation: drive-deleting-fade-in 0.18s ease-out;
+        }
+
+        .drive-deleting-spinner {
+            width: 13px;
+            height: 13px;
+            border: 2px solid rgba(255, 255, 255, 0.18);
+            border-top-color: rgba(168, 206, 56, 0.95);
+            border-radius: 50%;
+            animation: drive-deleting-spin 0.75s linear infinite;
+            flex-shrink: 0;
+        }
+
+        @keyframes drive-deleting-spin {
+            to { transform: rotate(360deg); }
+        }
+
+        @keyframes drive-deleting-fade-in {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .drive-deleting-overlay {
+                animation: none;
+            }
+            .drive-deleting-spinner {
+                animation: none;
+                border-top-color: rgba(168, 206, 56, 0.95);
+            }
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        /* Already downloaded message */
+        .already-downloaded-msg {
+            background: rgba(255, 193, 7, 0.15);
+            border: 1px solid rgba(255, 193, 7, 0.3);
+            color: #ffc107;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            text-align: center;
+            margin-bottom: 8px;
+            animation: slideDown 0.3s ease;
+        }
+
+        .already-downloaded-msg.fade-out {
+            animation: fadeOut 0.5s ease forwards;
+        }
+
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes fadeOut {
+            from { opacity: 1; }
+            to { opacity: 0; }
+        }
+
+        /* Highlight pulse for existing drives */
+        .highlight-pulse {
+            animation: highlightPulse 2s ease;
+        }
+
+        @keyframes highlightPulse {
+            0%, 100% { box-shadow: none; }
+            25%, 75% { box-shadow: 0 0 0 2px rgba(139, 195, 74, 0.6), 0 0 20px rgba(139, 195, 74, 0.3); }
+            50% { box-shadow: 0 0 0 3px rgba(139, 195, 74, 0.8), 0 0 30px rgba(139, 195, 74, 0.4); }
+        }
+    </style>
+</head>
+<body>
+    <!-- Draggable region for window movement -->
+    <div class="drag-region"></div>
+    
+    <!-- Header with profile icon -->
+    <!-- TODO: profile icon hidden for now — design and behavior to be decided later. To re-enable, remove the inline style="display: none" below. -->
+    <div class="header">
+        <div class="profile-icon" id="profileIcon" title="Profile" style="display: none;">
+            <!-- PearDrop Logo SVG (AirDrop-style with pear) -->
+            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <!-- Outer waves -->
+                <path d="M12 2C8.13 2 5 5.13 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.87-3.13-7-7-7zm0 2c2.76 0 5 2.24 5 5 0 1.65-.8 3.1-2.03 4.01L14 13.6V16h-4v-2.4l-.97-.59C7.8 12.1 7 10.65 7 9c0-2.76 2.24-5 5-5z" opacity="0.4"/>
+                <!-- Pear shape in center -->
+                <path d="M12 6c-1.66 0-3 1.79-3 4 0 1.5.67 2.82 1.7 3.57.26.19.3.56.3.93v1.5c0 .55.45 1 1 1s1-.45 1-1v-1.5c0-.37.04-.74.3-.93C14.33 12.82 15 11.5 15 10c0-2.21-1.34-4-3-4zm-.5 2.5c.28 0 .5.22.5.5s-.22.5-.5.5-.5-.22-.5-.5.22-.5.5-.5z"/>
+                <!-- Stem -->
+                <path d="M12 4.5c.28 0 .5-.22.5-.5V3c0-.28-.22-.5-.5-.5s-.5.22-.5.5v1c0 .28.22.5.5.5z"/>
+                <path d="M13.5 4c.2.2.5.2.7 0l.7-.7c.2-.2.2-.5 0-.7s-.5-.2-.7 0l-.7.7c-.2.2-.2.5 0 .7z"/>
+            </svg>
+        </div>
+    </div>
+    
+    <!-- =================================================================
+         App shell — wraps the (always-present) sidebar + the main app
+         column. The sidebar is hidden in mobile-UI (<600px) and shown in
+         desktop-UI (≥600px) via the media query below.
+         ================================================================= -->
+    <div class="app-shell">
+        <aside class="sidebar" aria-label="Primary navigation">
+            <nav class="sidebar-nav">
+                <!-- All Shares — default landing tab; pinned at top.
+                     Uses the SHARE layout under the hood (drop zone + SHARE
+                     button). See setActivePage() in renderer.js. -->
+                <button type="button" class="sidebar-nav-item is-active" data-page="allshares">
+                    <span class="sidebar-nav-icon" aria-hidden="true">📁</span>
+                    <span class="sidebar-nav-label">All Shares</span>
+                </button>
+                <button type="button" class="sidebar-nav-item" data-page="share">
+                    <span class="sidebar-nav-icon" aria-hidden="true">📤</span>
+                    <span class="sidebar-nav-label">Shares</span>
+                </button>
+                <button type="button" class="sidebar-nav-item" data-page="receive">
+                    <span class="sidebar-nav-icon" aria-hidden="true">📥</span>
+                    <span class="sidebar-nav-label">Receive</span>
+                </button>
+                <!-- Favorites — visual placeholder, no backend wiring.
+                     Sits directly above the Add Folder CTA. -->
+                <button type="button" class="sidebar-nav-item" data-page="favorites">
+                    <span class="sidebar-nav-icon" aria-hidden="true">⭐</span>
+                    <span class="sidebar-nav-label">Favorites</span>
+                </button>
+                <!-- Add Folder — visual CTA, must always render last in the nav. -->
+                <button type="button" class="sidebar-nav-item sidebar-nav-cta" data-page="addfolder">
+                    <span class="sidebar-nav-icon" aria-hidden="true">+</span>
+                    <span class="sidebar-nav-label">Add Folder</span>
+                </button>
+            </nav>
+
+            <div class="sidebar-footer">
+                <button type="button" class="sidebar-nav-item" data-page="settings" disabled title="Coming soon">
+                    <span class="sidebar-nav-icon" aria-hidden="true">⚙️</span>
+                    <span class="sidebar-nav-label">Settings</span>
+                </button>
+                <button type="button" class="sidebar-nav-item" data-page="device" disabled title="Coming soon">
+                    <span class="sidebar-nav-icon" aria-hidden="true">📱</span>
+                    <span class="sidebar-nav-label">My Device</span>
+                </button>
+            </div>
+        </aside>
+
+    <div class="app">
+        <!-- ============================================================
+             DESKTOP v2 TOP BAR — only visible at >= 600px.
+             Structure per Figma redesign:
+               [ Shares | Favorites tabs ]  [ ↑ Send ] [ ↓ Receive ] [ ⚙ ]
+             Sits above the search toolbar; both are new to v2 and
+             replace the old sidebar + page-header on desktop. Hidden on
+             mobile (mobile keeps its original tab-bar / bottom-bar). -->
+        <header class="app-top-bar" id="appTopBar">
+            <nav class="top-tabs" role="tablist" aria-label="Main sections">
+                <button type="button" class="top-tab is-active" data-tab="shares" role="tab" aria-selected="true">Shares</button>
+                <button type="button" class="top-tab" data-tab="favorites" role="tab" aria-selected="false">Favorites</button>
+            </nav>
+            <div class="top-actions">
+                <button type="button" class="top-action-btn" id="topSendBtn" title="Send files">
+                    <span class="top-action-icon" aria-hidden="true">↑</span>
+                    <span class="top-action-label">Send</span>
+                </button>
+                <button type="button" class="top-action-btn" id="topReceiveBtn" title="Receive files">
+                    <span class="top-action-icon" aria-hidden="true">↓</span>
+                    <span class="top-action-label">Receive</span>
+                </button>
+                <button type="button" class="top-settings-btn" id="topSettingsBtn" title="Settings" aria-label="Settings">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- Search + filter toolbar (desktop v2 only) -->
+        <div class="search-toolbar" id="searchToolbar">
+            <div class="search-input-wrap">
+                <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="11" cy="11" r="7"></circle>
+                    <path d="M21 21l-4.35-4.35"></path>
+                </svg>
+                <input type="text" class="search-input" id="listSearchInput" placeholder="Search" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="search-toolbar-actions">
+                <button type="button" class="toolbar-icon-btn" id="filterBtn" title="Filter" aria-label="Filter">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
+                    </svg>
+                    <span class="toolbar-caret" aria-hidden="true">▾</span>
+                </button>
+                <button type="button" class="toolbar-icon-btn" id="listOptionsBtn" title="List options" aria-label="List options">
+                    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <circle cx="5" cy="12" r="1.6"></circle>
+                        <circle cx="12" cy="12" r="1.6"></circle>
+                        <circle cx="19" cy="12" r="1.6"></circle>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Page heading — desktop-UI only. -->
+        <header class="page-header">
+            <h1 class="page-title" id="pageTitle">Shares</h1>
+        </header>
+
+        <!-- All Shares mode switch — segmented pill that toggles between
+             the drop-zone (Send) and the link-input pill (Receive). Only
+             shown on the All Shares page in desktop-UI; hidden everywhere
+             else. See setAllsharesMode() in renderer.js. -->
+        <div class="mode-tabs" id="modeTabs" role="tablist" aria-label="All Shares mode">
+            <button type="button" class="mode-tab is-active" data-mode="send" role="tab">
+                <span class="mode-tab-icon" aria-hidden="true">📤</span>
+                <span class="mode-tab-label">Send</span>
+            </button>
+            <button type="button" class="mode-tab" data-mode="receive" role="tab">
+                <span class="mode-tab-icon" aria-hidden="true">📥</span>
+                <span class="mode-tab-label">Receive</span>
+            </button>
+        </div>
+
+        <!-- Compact Drop Zone -->
+        <div class="drop-zone glass" id="dropZone">
+            <div class="drop-content" id="dropContent">
+                <div class="drop-icon">📁</div>
+                <div class="drop-text">Drop files or click to browse</div>
+                <div class="drop-hint">Share files instantly via P2P</div>
+            </div>
+            <div class="file-preview" id="filePreview">
+                <div class="file-icon-large" id="fileIcon">📄</div>
+                <div class="file-info">
+                    <div class="file-name" id="fileName">file.txt</div>
+                    <div class="file-size" id="fileSize">1.2 MB</div>
+                </div>
+                <button class="clear-btn" id="clearBtn">Clear</button>
+            </div>
+            <!-- Desktop-only: SHARE button rendered as a full-width bottom
+                 rail of the drop-zone panel. Hidden on mobile. -->
+            <button type="button" class="action-btn share drop-zone-share-btn" id="dropZoneShareBtn" disabled>SHARE</button>
+        </div>
+
+        <!-- Link Input — desktop renders as HERO (input card) + full-width
+             DOWNLOAD rail at the bottom. On mobile the input keeps its
+             original inline appearance; .link-input-field acts as the
+             QR-button positioning context in both layouts. -->
+        <div class="link-input-container">
+            <div class="link-input-field">
+                <input type="text" class="link-input" id="linkInput"
+                       placeholder="Paste peardrop:// link..."
+                       autocomplete="off" spellcheck="false">
+                <button type="button" class="qr-upload-btn" id="qrUploadBtn" title="Scan a QR code">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="3" width="7" height="7"></rect>
+                        <rect x="14" y="3" width="7" height="7"></rect>
+                        <rect x="3" y="14" width="7" height="7"></rect>
+                        <path d="M14 14h3v3h-3z"></path>
+                        <path d="M20 14v3"></path>
+                        <path d="M14 20h3"></path>
+                        <path d="M20 20v1"></path>
+                    </svg>
+                </button>
+            </div>
+            <input type="file" id="qrFileInput" accept="image/*" hidden>
+            <button type="button" class="action-btn download link-input-download-btn" id="linkInputDownloadBtn" disabled>DOWNLOAD</button>
+        </div>
+
+        <!-- Tab Header — mobile-UI navigation between Shares and Receive.
+             In desktop-UI the sidebar takes over the same role; both stay in
+             sync via the page-switch logic in renderer.js. -->
+        <div class="tab-bar">
+            <div class="tabs">
+                <button type="button" class="tab active" id="tabShares" data-page="share">Shares</button>
+                <button type="button" class="tab" id="tabReceive" data-page="receive">Receive</button>
+            </div>
+            <div class="list-menu-container">
+                <button class="list-menu-btn" id="listMenuBtn" title="List options">
+                    <div class="list-menu-dots">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                    </div>
+                </button>
+                <div class="list-menu-dropdown" id="listMenuDropdown">
+                    <button class="list-menu-item" data-action="select-shares">
+                        <span class="list-menu-item-icon">☑</span>
+                        Select Shares
+                    </button>
+                    <div class="list-menu-divider"></div>
+                    <!-- Sort By with submenu -->
+                    <div class="list-menu-item has-submenu" id="sortByTrigger">
+                        <span style="display: flex; align-items: center; gap: 10px;">
+                            <span class="list-menu-item-icon">↕</span>
+                            <span>Sort by</span>
+                        </span>
+                        <span class="submenu-arrow">▶</span>
+                    </div>
+                    <button class="list-menu-item" data-action="toggle-view" id="toggleViewBtn">
+                        <span class="list-menu-item-icon">⊞</span>
+                        <span id="toggleViewLabel">Expanded View</span>
+                    </button>
+                    <div class="list-menu-divider"></div>
+                    <button class="list-menu-item" data-action="pause-all">
+                        <span class="list-menu-item-icon">⏸</span>
+                        Pause All
+                    </button>
+                    <button class="list-menu-item" data-action="resume-all">
+                        <span class="list-menu-item-icon">▶</span>
+                        Resume All
+                    </button>
+                    <div class="list-menu-divider"></div>
+                    <button class="list-menu-item" data-action="clear-completed">
+                        <span class="list-menu-item-icon">✓</span>
+                        Clear Completed
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ScrollList Container -->
+        <div class="list-container" id="listContainer">
+            <!-- ScrollList renders here -->
+        </div>
+
+        <!-- Bottom bar — action buttons. The link input lives outside
+             this wrapper (see above, after the drop zone) so it can occupy
+             the same top slot as the drop zone on Receive page. -->
+        <div class="bottom-bar">
+            <div class="actions">
+                <button class="action-btn share" id="shareBtn" disabled>SHARE</button>
+                <button class="action-btn download" id="downloadBtn" disabled>DOWNLOAD</button>
+            </div>
+        </div>
+    </div>
+    </div><!-- /.app-shell -->
+
+    <!-- Share Link Modal — appears after user creates a share; shows QR
+         + peardrop:// link + Copy / Done buttons. Restyled to match the
+         Desktop v2 mockup (centered layout, larger QR, pill buttons). -->
+    <div class="modal-overlay" id="shareModal">
+        <div class="modal share-link-modal">
+            <div class="modal-title share-link-title">Share Link</div>
+            <div class="modal-subtitle share-link-subtitle">Scan or copy to download</div>
+            <canvas id="shareQrCode" width="180" height="180" class="share-link-qr" style="display:none;"></canvas>
+            <div class="share-link-display" id="shareLinkDisplay">Creating link...</div>
+            <div class="modal-actions share-link-actions">
+                <button class="modal-btn primary share-link-copy" id="copyLinkBtn">Copy Link</button>
+                <button class="modal-btn secondary share-link-done" id="closeShareBtn">Done</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================
+         File Info Modal (Desktop v2 redesign, Figma screen #19) —
+         opened from a drive card's 3-dot menu "Properties" item.
+         Follows the canonical modal appearance (760px wide, iOS
+         frosted-glass fill) — all per-modal CSS lives in .file-info-modal
+         and only tweaks INTERNAL layout, never the shell.
+         ============================================================ -->
+    <div class="modal-overlay file-info-modal-overlay" id="fileInfoModalOverlay">
+        <div class="modal file-info-modal">
+            <div class="file-info-header">
+                <h2 class="file-info-title" id="fileInfoTitle">File Info</h2>
+                <button type="button" class="file-info-close" id="fileInfoCloseBtn" aria-label="Close">×</button>
+            </div>
+
+            <div class="file-info-hero">
+                <div class="file-info-thumb" id="fileInfoThumb" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                    </svg>
+                </div>
+                <div class="file-info-hero-text">
+                    <div class="file-info-name" id="fileInfoName">—</div>
+                    <div class="file-info-sub" id="fileInfoSub">—</div>
+                </div>
+            </div>
+
+            <div class="file-info-grid" id="fileInfoGrid">
+                <!-- Rows injected by renderer.js:
+                     Type / Size / Files / Peers / Status / Added -->
+            </div>
+
+            <div class="file-info-linkbox" id="fileInfoLinkBox">
+                <div class="file-info-linkbox-label">Share link</div>
+                <div class="file-info-linkbox-row">
+                    <div class="file-info-linkbox-value" id="fileInfoLink">—</div>
+                    <button type="button" class="file-info-linkbox-copy" id="fileInfoCopyBtn">Copy</button>
+                </div>
+            </div>
+
+            <div class="modal-actions file-info-actions">
+                <button type="button" class="modal-btn secondary file-info-done" id="fileInfoDoneBtn">Done</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================
+         Send Modal (Desktop v2 redesign) — clicked from the top-right
+         "↑ Send" button. Contains an Add Files hero card that opens the
+         native file picker, and (future) a Recent Shares list. On file
+         selection it calls startShare, which will pop the existing
+         shareModal with the peardrop:// link + QR.
+         ============================================================ -->
+    <div class="modal-overlay send-modal-overlay" id="sendModalOverlay">
+        <div class="modal send-modal">
+            <div class="send-modal-header">
+                <h2 class="send-modal-title">Share</h2>
+                <button type="button" class="send-modal-close" id="sendModalCloseBtn" aria-label="Close">×</button>
+            </div>
+            <!-- State A: initial. Clicking opens native file picker. -->
+            <button type="button" class="send-add-files-card" id="sendAddFilesCard">
+                <div class="send-add-files-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                    </svg>
+                </div>
+                <div class="send-add-files-text">
+                    <div class="send-add-files-title">Add Files</div>
+                    <div class="send-add-files-hint">Drag and Drop here or click to browse</div>
+                </div>
+            </button>
+            <!-- State B: files picked. Preview list + Share action.
+                 Hidden until renderer.js populates + shows it. -->
+            <div class="send-file-review" id="sendFileReview">
+                <div class="send-file-review-header">
+                    <span class="send-file-review-title" id="sendFileReviewTitle">Ready to share</span>
+                    <button type="button" class="send-file-review-clear" id="sendFileReviewClearBtn">Clear all</button>
+                </div>
+                <div class="send-file-review-list" id="sendFileReviewList"></div>
+                <button type="button" class="send-share-btn" id="sendShareBtn">Share</button>
+            </div>
+
+            <!-- Recent Shares — 2-column grid of previously-shared items,
+                 populated from the drives list (filtered to type='share').
+                 Each card has thumbnail + name + "Link" button that copies
+                 that share's peardrop:// link. Hidden if no shares yet. -->
+            <div class="send-recent" id="sendRecentSection">
+                <div class="send-recent-divider"></div>
+                <div class="send-recent-header">Recent Shares</div>
+                <div class="send-recent-grid" id="sendRecentGrid"></div>
+                <div class="send-recent-empty" id="sendRecentEmpty">No shares yet</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================
+         Receive Modal (Desktop v2 redesign) — clicked from the top-right
+         "↓ Receive" button. Paste a peardrop:// link or launch the QR
+         scanner. Delegates to the existing startDownload flow (via
+         setting linkInput.value first) and window.openQrScanner.
+         ============================================================ -->
+    <div class="modal-overlay receive-modal-overlay" id="receiveModalOverlay">
+        <div class="modal receive-modal">
+            <div class="send-modal-header">
+                <h2 class="send-modal-title">Receive</h2>
+                <button type="button" class="send-modal-close" id="receiveModalCloseBtn" aria-label="Close">×</button>
+            </div>
+            <div class="receive-paste-row">
+                <input type="text" class="receive-paste-input" id="receivePasteInput" placeholder="Paste link here" autocomplete="off" spellcheck="false">
+                <button type="button" class="receive-paste-btn" id="receivePasteBtn">Paste</button>
+            </div>
+            <div class="receive-or-divider">
+                <span class="receive-or-line"></span>
+                <span class="receive-or-text">Or</span>
+                <span class="receive-or-line"></span>
+            </div>
+            <button type="button" class="receive-qr-area" id="receiveQrArea">
+                <span class="receive-qr-label">QR Code Scan</span>
+            </button>
+            <button type="button" class="receive-import-qr" id="receiveImportQrBtn">
+                <span class="receive-import-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                        <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                        <polyline points="21 15 16 10 5 21"></polyline>
+                    </svg>
+                </span>
+                <span>Import Qrcode Image</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Download-complete toast — bottom-right, appears when a download
+         finishes. Distinct from the general showToast (which is
+         center-bottom). Wired via renderer.js onFilesDownloaded. -->
+    <div class="download-toast" id="downloadCompleteToast">
+        <div class="download-toast-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+        </div>
+        <div class="download-toast-body">
+            <div class="download-toast-title">Download complete</div>
+            <div class="download-toast-subtitle" id="downloadCompleteFilename">file saved</div>
+        </div>
+        <button type="button" class="download-toast-detail" id="downloadCompleteDetail">Detail</button>
+    </div>
+
+    <!-- ============================================================
+         Settings Page (Desktop v2) — full-window overlay that covers
+         the whole app. Opens from the top-right gear button; closes via
+         the back arrow. Contains user card + Appearance + Support.
+         ============================================================ -->
+    <div class="app-fullpage" id="settingsPage">
+        <header class="fullpage-header">
+            <button type="button" class="fullpage-back" id="settingsBackBtn" aria-label="Back">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="15 18 9 12 15 6"></polyline>
+                </svg>
+            </button>
+            <h1 class="fullpage-title">Settings</h1>
+        </header>
+
+        <div class="settings-user-card">
+            <div class="settings-avatar" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <circle cx="12" cy="8" r="4"></circle>
+                    <path d="M4 20c0-4.4 3.6-8 8-8s8 3.6 8 8"></path>
+                </svg>
+            </div>
+            <div class="settings-user-info">
+                <div class="settings-user-name" id="settingsUserName">User Name</div>
+                <div class="settings-user-id" id="settingsUserId">id</div>
+            </div>
+            <button type="button" class="settings-signout-btn" id="settingsSignOutBtn">Sign Out</button>
+        </div>
+
+        <section class="settings-section">
+            <h2 class="settings-section-title">Appearance</h2>
+            <button type="button" class="settings-row" data-action="edit-account">
+                <span class="settings-row-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg></span>
+                <span class="settings-row-label">Edit Account</span>
+                <span class="settings-row-chevron" aria-hidden="true">›</span>
+            </button>
+            <button type="button" class="settings-row" data-action="language">
+                <span class="settings-row-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg></span>
+                <span class="settings-row-label">Language</span>
+                <span class="settings-row-chevron" aria-hidden="true">›</span>
+            </button>
+            <button type="button" class="settings-row" data-action="theme">
+                <span class="settings-row-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg></span>
+                <span class="settings-row-label">Theme</span>
+                <span class="settings-row-value">Dark</span>
+                <span class="settings-row-chevron" aria-hidden="true">›</span>
+            </button>
+        </section>
+
+        <section class="settings-section">
+            <h2 class="settings-section-title">Support</h2>
+            <button type="button" class="settings-row" data-action="report-bug" id="settingsReportBugBtn">
+                <span class="settings-row-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="M9 9h6v6H9z"></path></svg></span>
+                <span class="settings-row-label">Report a bug</span>
+                <span class="settings-row-chevron" aria-hidden="true">›</span>
+            </button>
+            <button type="button" class="settings-row" data-action="about">
+                <span class="settings-row-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span>
+                <span class="settings-row-label">About</span>
+                <span class="settings-row-value" id="settingsAboutVersion">v0.25.0</span>
+                <span class="settings-row-chevron" aria-hidden="true">›</span>
+            </button>
+        </section>
+    </div>
+
+    <!-- ============================================================
+         Report a bug Page (Desktop v2) — full-window overlay. Reached
+         from Settings → Report a bug row. Send Report button currently
+         just shows a "Report sent" confirmation toast (no backend wiring).
+         ============================================================ -->
+    <div class="app-fullpage" id="reportBugPage">
+        <header class="fullpage-header">
+            <button type="button" class="fullpage-back" id="reportBugBackBtn" aria-label="Back">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="15 18 9 12 15 6"></polyline>
+                </svg>
+            </button>
+            <h1 class="fullpage-title">Report a bug</h1>
+        </header>
+
+        <label class="bug-label" for="bugDescription">What went wrong?</label>
+        <div class="bug-textarea-wrap">
+            <textarea id="bugDescription" class="bug-textarea" maxlength="500" placeholder="Describe what happened..."></textarea>
+            <div class="bug-char-count"><span id="bugCharCount">0</span>/500</div>
+        </div>
+
+        <label class="bug-label" for="bugLocation">Where did it happen?</label>
+        <input type="text" id="bugLocation" class="bug-input" placeholder="where did it happen" autocomplete="off">
+
+        <div class="bug-attach-row">
+            <div class="bug-attach-info">
+                <div class="bug-attach-title">Attach device info</div>
+                <div class="bug-attach-subtitle">App version, OS, device model</div>
+            </div>
+            <div class="bug-attach-tags">
+                <span class="bug-tag" id="bugTagVersion">v0.25.0</span>
+                <span class="bug-tag" id="bugTagOS">Windows</span>
+            </div>
+            <label class="bug-toggle">
+                <input type="checkbox" id="bugAttachToggle" checked>
+                <span class="bug-toggle-slider"></span>
+            </label>
+        </div>
+
+        <button type="button" class="bug-send-btn" id="bugSendReportBtn">Send Report</button>
+    </div>
+
+    <!-- Reset Notice Modal — one-time playful heads-up after persistence-bug fix.
+         Shown only if legacy state files exist AND the user hasn't dismissed it yet.
+         Safe to remove this entire block (and the matching CSS + renderer logic + IPC handler)
+         once enough time has passed that everyone has migrated. -->
+    <div class="modal-overlay" id="resetNoticeModal">
+        <div class="modal reset-notice-modal">
+            <div class="modal-title">Quick heads up 🍐</div>
+            <div class="reset-notice-body">
+                We squashed a bug that was quietly wiping your active shares every time you closed the app — pretty bad, we know. The fix is in, but it meant clearing your existing share history one last time.
+                <br><br>
+                Every share you create from here on will <strong>actually stick around</strong>. Sorry not sorry — the fix was worth it.
+            </div>
+            <div class="modal-actions">
+                <button class="modal-btn primary" id="resetNoticeOkBtn">All good</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- QR Scanner Modal -->
+    <div class="modal-overlay" id="qrScannerModal">
+        <div class="modal qr-scanner-modal">
+            <button type="button" class="qr-scanner-close" id="qrScannerCloseBtn" aria-label="Close">×</button>
+            <div class="modal-title">Scan a QR code</div>
+            <div class="qr-scanner-stage">
+                <video class="qr-scanner-video" id="qrScannerVideo" autoplay muted playsinline></video>
+                <div class="qr-scanner-frame"></div>
+                <div class="qr-scanner-status" id="qrScannerStatus">Starting camera…</div>
+            </div>
+            <div class="qr-camera-dropdown" id="qrCameraDropdown" hidden>
+                <button type="button" class="qr-camera-trigger" id="qrCameraTrigger" aria-haspopup="listbox" aria-expanded="false">
+                    <svg class="qr-camera-trigger-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                        <circle cx="12" cy="13" r="4"></circle>
+                    </svg>
+                    <span class="qr-camera-trigger-label" id="qrCameraTriggerLabel">Camera</span>
+                    <svg class="qr-camera-trigger-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                    </svg>
+                </button>
+                <div class="qr-camera-panel" id="qrCameraPanel" role="listbox"></div>
+            </div>
+            <button type="button" class="qr-pick-file-btn" id="qrPickFileBtn">
+                Select file with QR
+            </button>
+        </div>
+    </div>
+
+    <!-- Toast for notifications -->
+    <div class="toast" id="toast"></div>
+
+    <!-- Sort submenu (outside dropdown to avoid transform containment) -->
+    <div class="list-submenu" id="sortSubmenu">
+        <button class="list-submenu-item" data-sort="reorder">
+            <span>Reorder</span>
+        </button>
+        <div class="list-menu-divider"></div>
+        <button class="list-submenu-item" data-sort="custom">
+            <span>Custom</span>
+            <span class="sort-arrow"></span>
+        </button>
+        <button class="list-submenu-item active" data-sort="recent">
+            <span>Recent</span>
+            <span class="sort-arrow">↓</span>
+        </button>
+        <button class="list-submenu-item" data-sort="status">
+            <span>Status</span>
+            <span class="sort-arrow"></span>
+        </button>
+        <button class="list-submenu-item" data-sort="size">
+            <span>Size</span>
+            <span class="sort-arrow"></span>
+        </button>
+        <button class="list-submenu-item" data-sort="name">
+            <span>Name</span>
+            <span class="sort-arrow"></span>
+        </button>
+        <button class="list-submenu-item" data-sort="peers">
+            <span>Peers</span>
+            <span class="sort-arrow"></span>
+        </button>
+        <button class="list-submenu-item" data-sort="filetype">
+            <span>File Type</span>
+            <span class="sort-arrow"></span>
+        </button>
+    </div>
+
+    <!-- Confirm Dialog -->
+    <div class="confirm-overlay" id="confirmOverlay">
+        <div class="confirm-dialog">
+            <div class="confirm-title" id="confirmTitle">Confirm</div>
+            <div class="confirm-message" id="confirmMessage">Are you sure?</div>
+            <div class="confirm-buttons" id="confirmButtons">
+                <!-- Buttons inserted dynamically -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Load modules -->
+    <!-- ui-utils MUST come first — drive-item and drive-info-panel delegate
+         to window.PearUtils for formatBytes / escapeHtml / getFileIcon. -->
+    <script src="lib/ui-utils.js"></script>
+    <script src="lib/selection-logic.js"></script>
+    <script src="lib/status-mapping.js"></script>
+    <script src="lib/dup-check-action.js"></script>
+    <script src="lib/scroll-list/scroll-list.js"></script>
+    <script src="lib/drive-item/drive-item.js"></script>
+    <script src="lib/drive-item/drive-info-panel.js"></script>
+    <script src="lib/drive-actions.js"></script>
+    <script src="node_modules/jsqr/dist/jsQR.js"></script>
+    <script src="lib/qr-scanner/qr-scanner.js"></script>
+    <script src="renderer.js"></script>
+</body>
+</html>

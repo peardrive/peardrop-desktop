@@ -1,0 +1,61 @@
+———————————————————————————
+# PRIMARY COLORS
+
+### LIGHTEST GREEN
+CMYK / 20 0 55 0
+RGB / 210 227 145
+  HEX / #d2e391
+
+
+### PEAR GREEN
+CMYK / 44 0 100 0
+ RGB / 168 206 56
+  HEX / #a8ce38
+
+
+### DARK GREEN
+CMYK / 65 0 100 0
+ RGB / 118 191 82
+  HEX / #76bf52
+
+
+### TEAL 1
+CMYK / 82 0 76 0
+RGB / 61 181 121
+  HEX / #3db579
+
+———————————————————————————
+# APP ICON BACKGROUND COLORS
+
+### DARK BLUE
+CMYK / 94 81 49 57
+  RGB / 15 34 56
+  HEX / #0f2238
+
+### MEDIUM BLUE
+CMYK / 85 62 10 1
+ RGB / 56 103 160
+  HEX / #3867a0
+
+———————————————————————————
+# SECONDARY COLORS
+
+### TURQUOISE ONE
+CMYK / 77 18 15 0
+ RGB / 72 159 193
+  HEX / #489fc1
+
+### TURQUOISE TWO
+CMYK / 86 55 31 9
+RGB / 45 101 134
+  HEX / #2d6586
+  
+### LIGHT ORANGE
+CMYK / 0 46 70 0
+RGB / 239 162 104
+  HEX / #efa268
+
+### DARK ORANGE
+CMYK / 0 62 100 0
+RGB / 231 133 49
+  HEX / #e78531
