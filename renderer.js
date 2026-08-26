@@ -11,6 +11,16 @@
  *   - Modular, standalone components
  * 
  * EXPORTS: None (DOM script)
+ *
+ * WINDOW-EXPOSED MODAL OPENERS (called from the DriveItem action
+ * handler, which is defined before the controllers run):
+ *   - openInfoModal / closeInfoModal     — File Info (screen #19)
+ *   - openFolderModal / closeFolderModal — Folder contents (screen #22)
+ *   - openSendModal / closeSendModal     — Send modal (screen #14)
+ *
+ * WINDOW-EXPOSED CONTROLLERS:
+ *   - shareProgress { begin, finish, fail } — drives Send-modal State C
+ *     and the bottom-right pill from the 'share-progress' IPC event
  * 
  * LAYOUT:
  *   - Header: Profile icon (top-left)
@@ -104,6 +114,95 @@ let currentPage = 'share';
 // Keyed by absolute file path → { kind: 'image' | 'icon' | 'none', src: string|null }.
 // Lives for the session; cleared on app restart. Avoids re-IPC on re-expand.
 const fileThumbnailCache = new Map();
+// Cache successes forever, failures never. A video grab that times out
+// while the app is still booting (10 drives resuming, swarm bootstrapping)
+// used to poison the cache with { kind:'none' } for the whole session —
+// which is why thumbnails only appeared after a manual refresh. Retrying
+// later is cheap; a permanently wrong icon is not.
+// Re-attempt any drive still without a real thumbnail, once the app has
+// stopped competing with itself for the decoder.
+let _thumbRetryTimer = null;
+function scheduleThumbnailRetry() {
+    if (_thumbRetryTimer) clearTimeout(_thumbRetryTimer);
+    _thumbRetryTimer = setTimeout(() => {
+        _thumbRetryTimer = null;
+        const run = () => {
+            for (const d of drives) {
+                try {
+                    loadSingleFileThumbnail(d.id);
+                    loadGroupThumbnail(d.id);
+                } catch (_) { /* one bad drive shouldn't stop the pass */ }
+            }
+        };
+        if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 3000 });
+        else run();
+    }, 4000);
+}
+
+// Disk-backed so thumbnails survive a restart — previously the Map was
+// in-memory only, so every cold start re-decoded every video from scratch.
+// Only successful IMAGE results are persisted; OS icons are cheap to
+// refetch and failures must stay retryable.
+// v2: v1 entries were written before the cover-art extractor was fixed and
+// can contain truncated (broken) image data URLs. Bumping the key discards
+// them — a persisted bad thumbnail survives restarts and would otherwise
+// mask the fix forever.
+const THUMB_CACHE_KEY = 'peardrop.thumbcache.v3';
+const THUMB_CACHE_STALE_KEYS = ['peardrop.thumbcache.v1', 'peardrop.thumbcache.v2'];
+const THUMB_CACHE_MAX = 300;          // ~3KB each -> comfortably under quota
+
+function loadThumbCache() {
+    // Reclaim the space old versions were using.
+    for (const k of THUMB_CACHE_STALE_KEYS) {
+        try { localStorage.removeItem(k); } catch (_) {}
+    }
+    try {
+        const raw = localStorage.getItem(THUMB_CACHE_KEY);
+        if (!raw) return;
+        const obj = JSON.parse(raw);
+        for (const [path, v] of Object.entries(obj)) {
+            if (!v || v.kind !== 'image' || !v.src) continue;
+            // A data: URL must carry a real payload and a plausible image
+            // mime. Cheap string check — decoding every entry at startup
+            // would be slower than regenerating the rare bad one.
+            if (v.src.startsWith('data:')) {
+                if (!/^data:image\/(jpeg|png|gif);base64,[A-Za-z0-9+/=]{200,}$/.test(v.src)) continue;
+            }
+            fileThumbnailCache.set(path, v);
+        }
+    } catch (_) { /* corrupt or unavailable — start empty */ }
+}
+
+let _thumbSaveTimer = null;
+function saveThumbCacheSoon() {
+    if (_thumbSaveTimer) return;
+    _thumbSaveTimer = setTimeout(() => {
+        _thumbSaveTimer = null;
+        try {
+            const out = {};
+            // Map preserves insertion order, so the tail is the most recent.
+            const entries = [...fileThumbnailCache.entries()]
+                .filter(([, v]) => v && v.kind === 'image' && v.src)
+                .slice(-THUMB_CACHE_MAX);
+            for (const [k, v] of entries) out[k] = v;
+            localStorage.setItem(THUMB_CACHE_KEY, JSON.stringify(out));
+        } catch (_) {
+            // Over quota — drop the persisted copy rather than throwing.
+            try { localStorage.removeItem(THUMB_CACHE_KEY); } catch (__) {}
+        }
+    }, 1500);
+}
+
+function cacheThumbResult(path, value) {
+    const v = value || { kind: 'none', src: null };
+    if (v.kind && v.kind !== 'none') {
+        fileThumbnailCache.set(path, v);
+        if (v.kind === 'image') saveThumbCacheSoon();
+    }
+    return v;
+}
+
+loadThumbCache();
 // Tracks paths currently being fetched so we don't kick off duplicate IPCs.
 const fileThumbnailPending = new Map();
 // driveIds for which we've already set the main thumbnail (single-file drives).
@@ -142,9 +241,23 @@ function init() {
                 // These live entirely in the renderer and don't hit
                 // DriveActions / the backend. `properties` opens the new
                 // canonical File Info modal (Figma screen #19).
+                if (event.action === 'view-files') {
+                    // Folder card "View files" -> folder contents modal
+                    // (Figma screen #22). Desktop only; mobile still uses
+                    // the inline expand.
+                    const stored = drives.find(d => d.id === event.data.id);
+                    window.openFolderModal?.({ ...(stored || {}), ...event.data });
+                    return;
+                }
                 if (event.action === 'favorite') {
                     const nowFav = toggleFavorite(event.data.id);
                     updateDriveInList({ id: event.data.id, favorite: nowFav });
+                    // Keep the slot's filter attribute in step, so a drive
+                    // un-starred while the Favorites tab is open disappears
+                    // from it immediately.
+                    const slot = scrollList?._slots?.get(event.data.id)?.slot;
+                    if (slot) slot.dataset.fav = nowFav ? 'true' : 'false';
+                    reindexVisibleSlots();
                     showToast(nowFav ? 'Added to Favorites' : 'Removed from Favorites');
                     return;
                 }
@@ -200,20 +313,92 @@ function init() {
                 // until the timer expires. Undo cancels the timer and restores
                 // the drive UI — no rollback needed because nothing ran yet.
                 if (event.action === 'remove') {
-                    startDeletionCountdown(event.data.id, {
-                        onExpire: async () => {
-                            const result = await driveActions.handle('remove', event.data);
-                            // Backend always emits the 'drives-updated' { action: 'removed' }
-                            // IPC, which removes the slot via the exit animation. The
-                            // success flag can be `false` for benign reasons (e.g.,
-                            // orphan drives missing from the state manifest) — only
-                            // surface a toast when there's an actual error message.
-                            if (!result.success && result.error) {
-                                cancelDeletionCountdown(event.data.id);
-                                showToast('Delete failed: ' + result.error, 'error');
-                            }
-                        }
-                        // onUndo intentionally omitted — backend was never called.
+                    const d = event.data;
+                    const pct = d.progress != null ? Math.round(d.progress * 100) : null;
+                    // The X on a transferring row emits 'remove' too, but
+                    // "cancel this transfer" and "remove a finished item"
+                    // are different questions and deserve different wording.
+                    const inFlight = d.status === 'downloading'
+                        || d.status === 'connecting'
+                        || (d.status === 'sharing' && pct != null && pct < 100);
+
+                    if (inFlight) {
+                        const isDown = d.status !== 'sharing';
+                        // CANCELLING IS NOT REMOVING. One plain question, no
+                        // checkbox and no undo window — those belong to
+                        // removing an item that is already sitting in the
+                        // list. Cancelling acts immediately.
+                        showConfirm({
+                            title: isDown ? 'Cancel this download?' : 'Cancel this share?',
+                            message: (d.title || 'This transfer')
+                                + (pct != null ? ` — currently at ${pct}%` : ''),
+                            buttons: [
+                                { label: isDown ? 'Keep downloading' : 'Keep sharing', class: 'secondary' },
+                                { label: 'Cancel transfer', class: 'danger', action: async () => {
+                                    // Freeze the UI immediately — the backend
+                                    // takes a moment to unwind, and a bar
+                                    // still climbing after you pressed Cancel
+                                    // reads as the button having done nothing.
+                                    cancellingDrives.add(d.id);
+                                    showCancellingOverlay(d.id);
+
+                                    // STOP THE TRANSFER FIRST. Removing the
+                                    // drive entry does not interrupt the
+                                    // download loop — without this the file
+                                    // carried on and finished anyway.
+                                    if (isDown) {
+                                        await window.electronAPI.hyperdriveDownloadCancel?.(d.id);
+                                    } else {
+                                        await window.electronAPI.hyperdriveShareCancel?.(d.id);
+                                    }
+                                    // For a DOWNLOAD, main owns the rest:
+                                    // it stops the loop, deletes the files,
+                                    // removes the entry and emits
+                                    // 'drives-updated { removed }' which
+                                    // takes the row out. Calling remove from
+                                    // here as well tore the drive storage out
+                                    // from under the running loop, which made
+                                    // it fail in a way that skipped cleanup
+                                    // entirely — the file then survived.
+                                    if (!isDown) {
+                                        const result = await driveActions.handle('remove', d, { deleteFiles: false });
+                                        if (!result.success && result.error) {
+                                            clearCancellingOverlay(d.id);
+                                            showToast('Cancel failed: ' + result.error, 'error');
+                                            return;
+                                        }
+                                    }
+                                    showToast(isDown ? 'Download cancelled' : 'Share cancelled');
+                                } }
+                            ]
+                        });
+                        return;
+                    }
+
+                    // `type` alone is not dependable here: the drive-item
+                    // library defaults it to 'download' when absent, and a
+                    // restored drive carries `isUpload` instead. Check every
+                    // signal so the checkbox can't silently disappear.
+                    const isDownload = d.type === 'download'
+                        || d.isUpload === false
+                        || !!d.localPath;
+                    showConfirm({
+                        title: 'Remove from list?',
+                        message: event.data.title || 'This share',
+                        // Only downloads have a local file worth offering to
+                        // delete; a share's file belongs to the user and
+                        // lives wherever they picked it from.
+                        checkbox: isDownload ? {
+                            label: 'Also delete the downloaded file',
+                            sub: 'Permanently removes it from your downloads folder.',
+                            checked: false
+                        } : null,
+                        buttons: [
+                            { label: 'Cancel', class: 'secondary' },
+                            { label: 'Remove', class: 'danger', action: ({ checked }) => {
+                                startRemoveCountdown(event.data, checked);
+                            } }
+                        ]
                     });
                     return;
                 }
@@ -334,8 +519,11 @@ function bindDropZone() {
     });
 }
 
-function selectFiles() {
-    if (filePreview.classList.contains('active')) return;
+function selectFiles({ force = false } = {}) {
+    // `force` is used by the Send modal's Add Files card, where re-opening
+    // the picker to add more files is the whole point. The drop-zone still
+    // gets the original guard.
+    if (!force && filePreview.classList.contains('active')) return;
     
     const input = document.createElement('input');
     input.type = 'file';
@@ -395,6 +583,13 @@ async function handleFiles(files) {
 }
 
 function updateDropZone() {
+    // Every path that mutates activeFiles ends here, so this is the single
+    // honest place to announce the change. The Send modal listens instead
+    // of polling — a native file dialog can stay open far longer than any
+    // poll window.
+    queueMicrotask(() => document.dispatchEvent(
+        new CustomEvent('activefiles-changed', { detail: { count: activeFiles.length } })));
+
     if (activeFiles.length === 0) {
         dropContent.classList.remove('hidden');
         filePreview.classList.remove('active');
@@ -540,6 +735,11 @@ async function startShare() {
     shareBtn.classList.remove('is-ready');
     shareBtn.textContent = 'SHARING...';
     
+    // Show build progress — in the Send modal if it's open, otherwise as
+    // the bottom-right pill. Totals come from activeFiles, which already
+    // carry per-file sizes.
+    window.shareProgress?.begin(activeFiles);
+
     try {
         // Must pass { files: [...], options: {} } - not just paths!
         const shareName = activeFiles.length === 1 
@@ -554,6 +754,10 @@ async function startShare() {
         if (result.success) {
             currentShareLink = result.shareLink;
             currentDriveId = result.driveId;
+            // Build finished — tear down progress, close Send, hand over to
+            // the Share Link modal. Same 760x520 shell, so this reads as a
+            // content swap rather than a second window.
+            window.shareProgress?.finish();
             showShareModal(result.shareLink);
             
             // Add to list but park it invisibly — the share-link modal is on
@@ -575,11 +779,17 @@ async function startShare() {
             
             // Clear drop zone after successful share
             clearFiles();
+        } else if (result.cancelled) {
+            // User pressed Cancel — expected, not a failure.
+            window.shareProgress?.fail(null);
+            showToast('Share cancelled', 'info');
         } else {
+            window.shareProgress?.fail(result.error || 'Share failed');
             showToast(result.error || 'Share failed', 'error');
         }
     } catch (err) {
         console.error('Share error:', err);
+        window.shareProgress?.fail(err.message);
         showToast('Share failed: ' + err.message, 'error');
     } finally {
         shareBtn.textContent = 'SHARE';
@@ -772,6 +982,8 @@ async function handleDownload(driveId, link) {
         const downloadResult = await window.electronAPI.hyperdriveDownload({ driveId });
         
         if (downloadResult.success) {
+            // Provisional. The authoritative state arrives with the
+            // 'files-downloaded' event, which knows whether seeding began.
             updateDriveInList({ id: driveId, status: 'complete', progress: 1 });
         } else {
             updateDriveInList({ id: driveId, status: 'error' });
@@ -961,6 +1173,10 @@ function addDriveToList(drive, options = {}) {
     // show/hide it via .view-share / .view-receive on the list container.
     if (result && result.slot) {
         result.slot.dataset.type = drive.type === 'download' ? 'download' : 'share';
+        // Same mechanism for the Favorites tab: CSS filters on this
+        // attribute, so switching tabs never re-renders the list.
+        result.slot.dataset.fav = isFavorite(drive.id) ? 'true' : 'false';
+        reindexVisibleSlots();
     }
 
     // If we have a non-recent sort active, re-apply sorting
@@ -1150,6 +1366,7 @@ function removeDriveFromList(driveId, options = {}) {
         scrollListSlotCount: scrollList._slots?.size || 'unknown'
     });
 
+    setTimeout(() => { try { reindexVisibleSlots(); } catch (_) {} }, 0);
     const scrollListResult = scrollList.removeItem(driveId, {
         animate: options.animate === true
     });
@@ -1224,6 +1441,28 @@ function saveFavorites() {
         localStorage.setItem(FAVORITES_KEY, JSON.stringify([...favoritesSet]));
     } catch (_) { /* quota exceeded / disabled — ignore */ }
 }
+// Row separators and their per-column offsets were keyed off :nth-child,
+// which counts EVERY slot — including ones the active tab filters out. A
+// single starred drive sitting at slot 7 would then draw a separator above
+// it as though it had rows above, and land in the wrong column's offset.
+// These attributes re-number only the slots actually on screen; the CSS
+// keys off them instead.
+function reindexVisibleSlots() {
+    if (!listContainer) return;
+    let i = 0;
+    listContainer.querySelectorAll('.scroll-list-slot').forEach((slot) => {
+        if (slot.offsetParent === null) {          // display:none via a view filter
+            delete slot.dataset.visIndex;
+            delete slot.dataset.visCol;
+            return;
+        }
+        slot.dataset.visIndex = String(i);
+        slot.dataset.visCol = (i % 2 === 0) ? 'left' : 'right';
+        i++;
+    });
+}
+window.reindexVisibleSlots = reindexVisibleSlots;
+
 function toggleFavorite(id) {
     if (!id) return false;
     if (favoritesSet.has(id)) favoritesSet.delete(id);
@@ -1273,6 +1512,11 @@ function bindIPC() {
             return;
         }
         
+        // Cancelled: ignore further progress so the bar and percentage stop
+        // dead the moment the user confirms, rather than climbing while the
+        // backend finishes unwinding.
+        if (cancellingDrives.has(driveId)) return;
+
         // If this is a download (peerId === 'self'), update progress
         if (peerId === 'self') {
             // Convert percent (0-100) to progress (0-1)
@@ -1298,15 +1542,24 @@ function bindIPC() {
     
     // Download complete
     window.electronAPI.onFilesDownloaded?.((event, data) => {
-        const { driveId, files } = data;
+        const { driveId, files, isSeeding } = data;
         const item = driveItems.get(driveId);
         if (item) {
+            // A finished download does NOT stop being useful — main.js sets
+            // the drive to ACTIVE and starts seeding it (see "Download
+            // complete, now seeding"), because that's the whole point of a
+            // P2P network: what you fetched, you now serve.
+            //
+            // The renderer used to hardcode 'complete' and drop the
+            // isSeeding flag the backend was already sending, so a drive
+            // that was actively sharing displayed as a finished, inert
+            // item. Report what is actually true.
             item.update({
-                status: 'complete',
+                status: isSeeding ? 'sharing' : 'complete',
                 progress: 1,
                 fileCount: files?.length || 1
             });
-            showToast('Download complete!', 'success');
+            showToast(isSeeding ? 'Download complete — now sharing' : 'Download complete!', 'success');
         }
     });
     
@@ -1324,8 +1577,18 @@ function bindIPC() {
                         addDriveToList(normalized);
                     }
                 }
+                // The thumbnail attempt inside addDriveToList races drive
+                // resumption and swarm bootstrap, so on a cold start the
+                // video grabs time out. Failures are no longer cached, so a
+                // second pass once things are quiet actually sticks — this
+                // is what a manual refresh was doing by hand.
+                scheduleThumbnailRetry();
             }
         } else if (data.action === 'removed' && data.id) {
+            // The row is going away, so stop suppressing its progress events.
+            // Without this the id stays in the set for the life of the
+            // session and would silently mute a future drive reusing it.
+            cancellingDrives.delete(data.id);
             // Drive was deleted from backend
             console.log('[DEBUG] onDrivesUpdated - removal event received:', {
                 action: data.action,
@@ -1451,12 +1714,39 @@ function getFileExt(name) {
 // data: URL stays tiny (faster encode, smaller memory cost). Resolves with
 // { kind: 'image', src }, rejects on any failure — caller falls back to
 // the OS-icon path.
+// Video decoding is expensive; ten of them at once during startup is what
+// pushed every attempt past its timeout. Cap concurrency so each gets a
+// fair share of the decoder instead of all of them failing together.
+const VIDEO_THUMB_CONCURRENCY = 2;
+const _videoThumbQueue = [];
+let _videoThumbActive = 0;
+
+function _pumpVideoThumbQueue() {
+    while (_videoThumbActive < VIDEO_THUMB_CONCURRENCY && _videoThumbQueue.length) {
+        const job = _videoThumbQueue.shift();
+        _videoThumbActive++;
+        generateVideoThumb(job.path)
+            .then(job.resolve, job.reject)
+            .finally(() => { _videoThumbActive--; _pumpVideoThumbQueue(); });
+    }
+}
+
+function queueVideoThumb(filePath) {
+    return new Promise((resolve, reject) => {
+        _videoThumbQueue.push({ path: filePath, resolve, reject });
+        _pumpVideoThumbQueue();
+    });
+}
+
 function generateVideoThumb(filePath) {
     return new Promise((resolve, reject) => {
         if (!filePath) return reject(new Error('No path'));
 
         const video = document.createElement('video');
-        video.preload = 'metadata';
+        // 'metadata' only fetches headers — the seek could report complete
+        // before any frame was decoded, so drawImage painted nothing and
+        // the canvas kept its own black fill. That was the black thumbnail.
+        video.preload = 'auto';
         video.muted = true;
         video.playsInline = true;
         // Keep it out of the layout / off-screen
@@ -1479,6 +1769,13 @@ function generateVideoThumb(filePath) {
         const fail = (err) => {
             if (done) return;
             done = true;
+            // Surfaces WHY a video fell back to the generic icon — codec,
+            // timeout, or no frame. Cheap, and there's no other signal.
+            console.warn('[video-thumb] fallback to icon:', filePath,
+                         '|', (err && err.message) || 'unknown',
+                         '| readyState=', video.readyState,
+                         'dims=', video.videoWidth + 'x' + video.videoHeight,
+                         'err=', video.error && video.error.code);
             cleanup();
             reject(err || new Error('Video thumb failed'));
         };
@@ -1489,17 +1786,56 @@ function generateVideoThumb(filePath) {
             resolve({ kind: 'image', src: dataUrl });
         };
 
-        video.addEventListener('loadedmetadata', () => {
-            // Seek to early (but not 0) so we skip black opening frames.
-            const seekTo = Math.min(1, (video.duration || 4) / 4);
-            try {
-                video.currentTime = seekTo;
-            } catch (err) {
-                fail(err);
-            }
-        });
+        // Candidate timestamps, tried in order. 1s was far too early —
+        // films routinely open on several seconds of black leader or a
+        // fading studio logo. If a grab comes back essentially black we
+        // move deeper into the file rather than shipping a black square.
+        let attempt = 0;
+        const seekPoints = () => {
+            const d = video.duration;
+            if (!d || !isFinite(d)) return [1, 3, 6];
+            return [d * 0.10, d * 0.25, d * 0.45, d * 0.65]
+                .map(t => Math.min(Math.max(t, 0.5), Math.max(d - 0.2, 0.5)));
+        };
 
-        video.addEventListener('seeked', () => {
+        const seekNext = () => {
+            const points = seekPoints();
+            while (attempt < points.length) {
+                const t = points[attempt++];
+                // Skip a target we're effectively already at — assigning it
+                // fires no 'seeked', so the chain would stall until the
+                // safety timeout.
+                if (Math.abs((video.currentTime || 0) - t) < 0.05) continue;
+                try {
+                    video.currentTime = t;
+                    return true;
+                } catch (err) {
+                    fail(err);
+                    return false;
+                }
+            }
+            return false;
+        };
+
+        video.addEventListener('loadedmetadata', () => { seekNext(); });
+
+        // Mean luminance of the grab. Near-zero means we caught black
+        // leader (or an undecoded frame) and should try further in.
+        const isMostlyBlack = (ctx, size) => {
+            try {
+                const { data } = ctx.getImageData(0, 0, size, size);
+                let sum = 0;
+                // Every 4th pixel is plenty for a yes/no answer.
+                for (let i = 0; i < data.length; i += 16) {
+                    sum += 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+                }
+                return (sum / (data.length / 16)) < 12;   // 0-255 scale
+            } catch {
+                return false;   // canvas unreadable — take what we have
+            }
+        };
+
+        const drawFrame = () => {
             try {
                 const target = 80;
                 const vw = video.videoWidth || 1;
@@ -1515,9 +1851,46 @@ function generateVideoThumb(filePath) {
                 ctx.fillStyle = '#000';
                 ctx.fillRect(0, 0, target, target);
                 ctx.drawImage(video, (target - dw) / 2, (target - dh) / 2, dw, dh);
+
+                // Black grab and points left to try → go deeper.
+                if (isMostlyBlack(ctx, target) && seekNext()) return;
+
                 succeed(canvas.toDataURL('image/jpeg', 0.72));
             } catch (err) {
                 fail(err);
+            }
+        };
+
+        let frameWatchdog = null;
+        const clearFrameWatchdog = () => {
+            if (frameWatchdog) { clearTimeout(frameWatchdog); frameWatchdog = null; }
+        };
+
+        video.addEventListener('seeked', () => {
+            // A completed seek does NOT guarantee a decoded frame is ready
+            // to paint. requestVideoFrameCallback fires only once one has
+            // actually been presented; readyState is the fallback.
+            clearFrameWatchdog();
+
+            // ...but rVFC can also never fire (paused element, codec quirk).
+            // Without this the whole attempt burned the global timeout and
+            // fell back to the OS icon. Draw anyway once a frame exists.
+            frameWatchdog = setTimeout(() => {
+                if (done) return;
+                if (video.readyState >= 2) drawFrame();
+                else if (!seekNext()) fail(new Error('No frame after seek'));
+            }, 2500);
+
+            if (typeof video.requestVideoFrameCallback === 'function') {
+                video.requestVideoFrameCallback(() => { clearFrameWatchdog(); drawFrame(); });
+            } else if (video.readyState >= 2) {
+                clearFrameWatchdog();
+                drawFrame();
+            } else {
+                video.addEventListener('loadeddata', () => {
+                    clearFrameWatchdog();
+                    drawFrame();
+                }, { once: true });
             }
         });
 
@@ -1525,10 +1898,18 @@ function generateVideoThumb(filePath) {
 
         // Append + assign src last so all listeners are wired first.
         document.body.appendChild(video);
-        video.src = 'file:///' + filePath.replace(/\\/g, '/');
+        // Encode each segment: an unencoded '#' truncates the URL and the
+        // file silently never loads (the drive letter's ':' must stay literal).
+        video.src = 'file:///' + filePath
+            .replace(/\\/g, '/')
+            .split('/')
+            .map((seg, i) => (i === 0 && /^[a-zA-Z]:$/.test(seg)) ? seg : encodeURIComponent(seg))
+            .join('/');
 
-        // Safety net — never block the page forever on a bad file.
-        setTimeout(() => fail(new Error('Video thumb timeout')), 10000);
+        // Safety net — never block the page forever on a bad file. 10s was
+        // too tight: preload:'auto' plus a seek 10% into a 1080p MKV can
+        // take longer, and every timeout silently became an OS icon.
+        setTimeout(() => fail(new Error('Video thumb timeout')), 25000);
     });
 }
 
@@ -1571,7 +1952,7 @@ async function loadFileThumbnails(driveId) {
             // (unsupported codec, broken file, timeout), fall through to
             // the IPC which returns the OS-native icon.
             const fetcher = isVideo
-                ? generateVideoThumb(filePath).catch(() =>
+                ? queueVideoThumb(filePath).catch(() =>
                     window.electronAPI.getFileThumbnail(filePath)
                   )
                 : window.electronAPI.getFileThumbnail(filePath);
@@ -1579,13 +1960,13 @@ async function loadFileThumbnails(driveId) {
             promise = fetcher
                 .then((result) => {
                     const value = result || { kind: 'none', src: null };
-                    fileThumbnailCache.set(filePath, value);
+                    cacheThumbResult(filePath, value);
                     fileThumbnailPending.delete(filePath);
                     return value;
                 })
                 .catch(() => {
                     const value = { kind: 'none', src: null };
-                    fileThumbnailCache.set(filePath, value);
+                    cacheThumbResult(filePath, value);
                     fileThumbnailPending.delete(filePath);
                     return value;
                 });
@@ -1624,7 +2005,7 @@ async function loadSingleFileThumbnail(driveId) {
         } else {
             const isVideo = VIDEO_EXTS.has(getFileExt(file.name));
             const fetcher = isVideo
-                ? generateVideoThumb(file.path).catch((err) => {
+                ? queueVideoThumb(file.path).catch((err) => {
                     // Log the reason so we can see WHY a specific file
                     // failed to poster (bad codec, DRM, corrupt header).
                     // Falls back to the OS-icon path which the filter
@@ -1634,7 +2015,7 @@ async function loadSingleFileThumbnail(driveId) {
                   })
                 : window.electronAPI.getFileThumbnail(file.path);
             value = await fetcher;
-            fileThumbnailCache.set(file.path, value || { kind: 'none', src: null });
+            cacheThumbResult(file.path, value);
         }
     } catch {
         return; // silent fail — emoji fallback stays
@@ -1680,11 +2061,11 @@ async function loadGroupThumbnail(driveId) {
         try {
             const isVideo = VIDEO_EXTS.has(getFileExt(file.name));
             const value = isVideo
-                ? await generateVideoThumb(file.path).catch(() =>
+                ? await queueVideoThumb(file.path).catch(() =>
                     window.electronAPI.getFileThumbnail(file.path)
                   )
                 : await window.electronAPI.getFileThumbnail(file.path);
-            fileThumbnailCache.set(file.path, value || { kind: 'none', src: null });
+            cacheThumbResult(file.path, value);
             return value;
         } catch {
             return null;
@@ -1818,10 +2199,21 @@ function roundedRectPath(ctx, x, y, w, h, r) {
 // `none` leaves the existing emoji as-is.
 function applyThumbnail(thumbEl, value) {
     if (!value || !value.src) return;
+    const previous = thumbEl.innerHTML;
     const img = document.createElement('img');
-    img.src = value.src;
     img.alt = '';
     img.draggable = false;
+    // If the source turns out to be undecodable, restore whatever icon was
+    // there and forget the entry. A broken-page glyph is strictly worse
+    // than the category icon it replaced.
+    img.addEventListener('error', () => {
+        thumbEl.innerHTML = previous;
+        for (const [k, v] of fileThumbnailCache) {
+            if (v && v.src === value.src) { fileThumbnailCache.delete(k); break; }
+        }
+        saveThumbCacheSoon();
+    }, { once: true });
+    img.src = value.src;
     thumbEl.innerHTML = '';
     thumbEl.appendChild(img);
 }
@@ -2319,14 +2711,96 @@ function bindScrollListEvents() {
     });
 }
 
+// Drives the user has cancelled. Progress events for these are dropped so
+// the bar and percentage freeze the instant Cancel is pressed, instead of
+// ticking upward while the backend unwinds.
+const cancellingDrives = new Set();
+
+/**
+ * Show the "Cancelling…" overlay on a slot. Same shape as the delete
+ * countdown's final state — the row dims and one clear label takes over —
+ * but with no timer and no undo: cancelling is immediate.
+ */
+function showCancellingOverlay(driveId) {
+    const slotData = scrollList && scrollList._slots && scrollList._slots.get(driveId);
+    if (!slotData || !slotData.slot) return;
+    const slot = slotData.slot;
+    if (slot.querySelector('.drive-cancel-overlay')) return;
+
+    slot.classList.add('is-deleting-now');
+    const overlay = document.createElement('div');
+    overlay.className = 'drive-delete-countdown drive-cancel-overlay is-final';
+    overlay.innerHTML = '<span class="drive-cancel-label">Cancelling…</span>';
+    slot.appendChild(overlay);
+}
+
+function clearCancellingOverlay(driveId) {
+    cancellingDrives.delete(driveId);
+    const slotData = scrollList && scrollList._slots && scrollList._slots.get(driveId);
+    if (!slotData || !slotData.slot) return;
+    slotData.slot.classList.remove('is-deleting-now');
+    const overlay = slotData.slot.querySelector('.drive-cancel-overlay');
+    if (overlay) overlay.remove();
+}
+
+/**
+ * Remove a drive after the 5s undo window.
+ *
+ * The backend is not called until the timer expires, so Undo simply cancels
+ * the timer — there is nothing to roll back. `deleteFiles` comes from the
+ * confirm dialog's checkbox and is what actually erases the downloaded file
+ * from disk; without it the row disappears but the file stays, which is how
+ * duplicate copies used to pile up in the downloads folder.
+ */
+function startRemoveCountdown(data, deleteFiles) {
+    startDeletionCountdown(data.id, {
+        onExpire: async () => {
+            const result = await driveActions.handle('remove', data, { deleteFiles: !!deleteFiles });
+            // Backend always emits 'drives-updated' { action: 'removed' },
+            // which removes the slot via the exit animation. `success` can be
+            // false for benign reasons (an orphan drive missing from the
+            // manifest), so only surface a toast on a real error.
+            if (!result.success && result.error) {
+                cancelDeletionCountdown(data.id);
+                showToast('Delete failed: ' + result.error, 'error');
+            } else if (deleteFiles) {
+                showToast('Removed and deleted from disk');
+            }
+        }
+        // onUndo intentionally omitted — the backend was never called.
+    });
+}
+
 // ============================================================================
 // CONFIRM DIALOG
 // ============================================================================
 
-function showConfirm({ title, message, buttons }) {
+function showConfirm({ title, message, buttons, checkbox }) {
     confirmTitle.textContent = title;
     confirmMessage.textContent = message;
-    
+
+    // Optional opt-in row. `checkbox` = { label, sub, checked }. Its state
+    // is passed to each button's action, so callers don't have to reach
+    // into the DOM.
+    const checkRow = document.getElementById('confirmCheck');
+    const checkInput = document.getElementById('confirmCheckInput');
+    const checkLabel = document.getElementById('confirmCheckLabel');
+    if (checkbox) {
+        checkLabel.innerHTML = '';
+        checkLabel.appendChild(document.createTextNode(checkbox.label || ''));
+        if (checkbox.sub) {
+            const sub = document.createElement('span');
+            sub.className = 'confirm-check-sub';
+            sub.textContent = checkbox.sub;
+            checkLabel.appendChild(sub);
+        }
+        checkInput.checked = !!checkbox.checked;
+        checkRow.classList.add('visible');
+    } else {
+        checkRow.classList.remove('visible');
+        checkInput.checked = false;
+    }
+
     // Clear and add buttons
     confirmButtons.innerHTML = '';
     buttons.forEach(btn => {
@@ -2334,8 +2808,9 @@ function showConfirm({ title, message, buttons }) {
         button.className = `confirm-btn ${btn.class || 'secondary'}`;
         button.textContent = btn.label;
         button.addEventListener('click', () => {
+            const checked = !!checkInput.checked;
             hideConfirm();
-            if (btn.action) btn.action();
+            if (btn.action) btn.action({ checked });
         });
         confirmButtons.appendChild(button);
     });
@@ -2375,6 +2850,9 @@ function setActivePage(page) {
     if (page !== 'share' && page !== 'receive' && page !== 'allshares') return;
     if (page === currentPage) return;
     currentPage = page;
+    // The view-* class swap below changes which slots are visible, so the
+    // separator numbering has to be recomputed once the classes land.
+    setTimeout(() => { try { reindexVisibleSlots(); } catch (_) {} }, 0);
 
     // "allshares" reuses the SHARE tab's layout (drop-zone visible, SHARE
     // button visible) — only the sidebar-active state and page heading
@@ -2490,9 +2968,18 @@ setActivePage('allshares');
                 t.classList.toggle('is-active', isActive);
                 t.setAttribute('aria-selected', isActive ? 'true' : 'false');
             });
-            // TODO: filter the drives list by tab (shares vs favorites).
-            // Favorites requires a `favorite` flag on drive entries which
-            // the backend does not track yet — hooked up when that lands.
+            // Filter the list. Favourites live in localStorage
+            // (favoritesSet), so this needs nothing from the backend.
+            // Purely a class swap — the CSS does the hiding, so no
+            // re-render and no scroll-position loss.
+            if (listContainer) {
+                listContainer.classList.toggle('view-favorites', target === 'favorites');
+            }
+            const pageTitle = document.getElementById('pageTitle');
+            if (pageTitle) {
+                pageTitle.textContent = target === 'favorites' ? 'Favorites' : 'Shares';
+            }
+            reindexVisibleSlots();
         });
     });
 
@@ -2623,8 +3110,14 @@ setActivePage('allshares');
         const grid = document.getElementById('sendRecentGrid');
         if (!section || !grid) return;
         const all = (typeof drives !== 'undefined' && Array.isArray(drives)) ? drives : [];
+        // SENDS ONLY — never receives. Note this can't whitelist 'share'
+        // alone: drives restored from the backend manifest come back as
+        // type 'upload' (see the check at line ~337), so a strict
+        // === 'share' test silently dropped every share from a previous
+        // session. Excluding downloads is the same rule addDriveToList
+        // uses when tagging slots, so the two always agree.
         // Cap at 4 — matches the Figma (2×2 grid, up to 4 most-recent).
-        const shares = all.filter(d => d.type === 'share').slice(0, 4);
+        const shares = all.filter(d => d.type !== 'download').slice(0, 4);
         section.classList.add('active');
         if (shares.length === 0) {
             section.classList.add('is-empty');
@@ -2632,14 +3125,29 @@ setActivePage('allshares');
             return;
         }
         section.classList.remove('is-empty');
-        grid.innerHTML = shares.map(d => {
+        // Same iOS Files.app folder used by the main list's cards, so the
+        // two surfaces don't drift into different icon languages.
+        const FOLDER_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M3.4 4h4.2a1.6 1.6 0 0 1 1.13.47L10 5.5h-7V5.6A1.6 1.6 0 0 1 3.4 4z"/><path d="M2 8.4a1.6 1.6 0 0 1 1.6-1.6h16.8A1.6 1.6 0 0 1 22 8.4v10.2A1.4 1.4 0 0 1 20.6 20H3.4A1.4 1.4 0 0 1 2 18.6z"/></svg>';
+
+        grid.innerHTML = shares.map((d, i) => {
             const isFolder = (d.fileCount || 0) > 1 || d.type === 'folder';
             const category = isFolder ? 'Folder' : categoryFromName(d.title);
             const status = humanStatus(d);
-            const fallbackIcon = isFolder ? '📁' : iconForType({ name: d.title });
+            // Real SVG icons rather than the old emoji fallback — same
+            // getFileIconSvg() the drive-item cards use, so category tints
+            // match exactly.
+            let fallbackIcon;
+            if (isFolder) {
+                fallbackIcon = `<span class="send-recent-thumb-folder">${FOLDER_SVG}</span>`;
+            } else {
+                const ic = window.PearUtils?.getFileIconSvg?.(d.title);
+                fallbackIcon = ic
+                    ? `<span class="send-recent-thumb-fileicon" style="color:${ic.color}">${ic.svg}</span>`
+                    : '';
+            }
             return `
-                <div class="send-recent-item" data-drive-id="${escapeHtml(d.id)}">
-                    <div class="send-recent-item-thumb" data-drive-id="${escapeHtml(d.id)}" aria-hidden="true">${fallbackIcon}</div>
+                <div class="send-recent-item" data-drive-id="${escapeHtml(d.id)}" data-col="${i % 2 === 0 ? 'left' : 'right'}" data-idx="${i}">
+                    <div class="send-recent-item-thumb${isFolder ? ' is-folder' : ''}" data-drive-id="${escapeHtml(d.id)}" aria-hidden="true">${fallbackIcon}</div>
                     <div class="send-recent-item-info">
                         <div class="send-recent-item-name">${escapeHtml(d.title)}</div>
                         <div class="send-recent-item-subtitle">${escapeHtml(category)} · <span class="send-recent-item-subtitle-status">${escapeHtml(status)}</span></div>
@@ -2652,12 +3160,25 @@ setActivePage('allshares');
         // instantly, then swaps in when the IPC returns. Same infra used
         // by the drive-item list for consistency.
         shares.forEach((d) => {
+            // Folders keep the folder icon — the list does the same. Using
+            // files[0] here meant a folder showed its first file's preview.
+            const isFolder = (d.fileCount || 0) > 1 || d.type === 'folder';
+            if (isFolder) return;
+
             const path = d.files?.[0]?.path;
             if (!path || !window.electronAPI?.getFileThumbnail) return;
             window.electronAPI.getFileThumbnail(path).then((res) => {
-                if (!res || !res.src || res.kind === 'none') return;
+                // ONLY real image previews. main.js also returns
+                // { kind: 'icon' } — a Windows shell icon — and swapping
+                // that in replaced the category-tinted SVG with a generic
+                // OS glyph, which is why these stopped matching the list.
+                // The drives list rejects 'icon' for the same reason.
+                if (!res || res.kind !== 'image' || !res.src) return;
                 const thumbEl = grid.querySelector(`.send-recent-item-thumb[data-drive-id="${d.id}"]`);
-                if (thumbEl) thumbEl.innerHTML = `<img src="${res.src}" alt="">`;
+                if (thumbEl) {
+                    thumbEl.innerHTML = `<img src="${res.src}" alt="">`;
+                    thumbEl.classList.remove('is-folder');
+                }
             }).catch(() => {});
         });
     }
@@ -2691,6 +3212,11 @@ setActivePage('allshares');
         sendModalOverlay.classList.remove('active');
     }
 
+    // Exposed so the share-progress controller can reopen the modal from
+    // the background pill, and skip re-rendering State A/B mid-share.
+    window.openSendModal  = openSendModal;
+    window.closeSendModal = closeSendModal;
+
     if (sendBtn) sendBtn.addEventListener('click', openSendModal);
     if (sendModalClose) sendModalClose.addEventListener('click', closeSendModal);
     if (sendModalOverlay) {
@@ -2704,25 +3230,17 @@ setActivePage('allshares');
     // activeFiles, we re-render the modal into State B.
     if (sendAddFilesCard) {
         sendAddFilesCard.addEventListener('click', () => {
-            if (typeof selectFiles === 'function') {
-                selectFiles();
-                // Poll briefly for activeFiles to fill in (handleFiles is
-                // async — fetches stats via IPC — so we can't just call
-                // renderSendFileReview() synchronously here). MutationObserver
-                // on filePreview.active would be cleaner but this is simpler.
-                let attempts = 0;
-                const tick = setInterval(() => {
-                    attempts++;
-                    if (typeof activeFiles !== 'undefined' && activeFiles.length > 0) {
-                        clearInterval(tick);
-                        renderSendFileReview();
-                    } else if (attempts > 40) {  // ~4 seconds worst case
-                        clearInterval(tick);
-                    }
-                }, 100);
-            }
+            // force: the picker must reopen even when files are already
+            // staged, so the card can add more.
+            if (typeof selectFiles === 'function') selectFiles({ force: true });
         });
     }
+
+    // Re-render the modal whenever the selection changes, from ANY source:
+    // the picker (however long the user browses), a drag-drop, or Clear all.
+    document.addEventListener('activefiles-changed', () => {
+        if (sendModalOverlay?.classList.contains('active')) renderSendFileReview();
+    });
 
     // "Change files" — clear the current selection and go back to State A.
     if (sendFileReviewClearBtn) {
@@ -2737,7 +3255,10 @@ setActivePage('allshares');
     // We close the Send modal as we hand off.
     if (sendShareBtn) {
         sendShareBtn.addEventListener('click', () => {
-            closeSendModal();
+            // Modal STAYS OPEN — startShare() flips it into State C
+            // (progress) and swaps to the Share Link modal when the drive
+            // finishes building. Closing here left the user staring at a
+            // blank screen for the whole build.
             if (typeof startShare === 'function') startShare();
         });
     }
@@ -2763,6 +3284,7 @@ setActivePage('allshares');
         if (!receiveModalOverlay) return;
         receiveModalOverlay.classList.remove('active');
         if (receivePasteInput) receivePasteInput.value = '';
+        if (typeof updateReceiveLinkHint === 'function') updateReceiveLinkHint();
     }
 
     if (receiveBtn) receiveBtn.addEventListener('click', openReceiveModal);
@@ -2788,7 +3310,59 @@ setActivePage('allshares');
         closeReceiveModal();
         if (typeof startDownload === 'function') startDownload();
     }
-    if (receivePasteBtn) receivePasteBtn.addEventListener('click', submitReceiveLink);
+    // Live link validation. Uses the SAME pattern startDownload() checks
+    // against, so the hint can never promise something the download then
+    // rejects — a loose startsWith('peardrop://') would say "press Enter"
+    // for a key of the wrong length.
+    const receiveLinkHint = document.getElementById('receiveLinkHint');
+    const PEARDROP_LINK_RE = /peardrop:\/\/[a-f0-9]{64}/i;
+
+    function updateReceiveLinkHint() {
+        if (!receiveLinkHint || !receivePasteInput) return;
+        const raw = receivePasteInput.value.trim();
+        receiveLinkHint.classList.remove('is-valid', 'is-invalid');
+        if (!raw) {
+            receiveLinkHint.textContent = '';
+            return;
+        }
+        if (PEARDROP_LINK_RE.test(raw)) {
+            receiveLinkHint.textContent = 'Press Enter to download';
+            receiveLinkHint.classList.add('is-valid');
+        } else {
+            receiveLinkHint.textContent = raw.toLowerCase().startsWith('peardrop://')
+                ? 'Invalid link — the key must be exactly 64 characters'
+                : 'Invalid link';
+            receiveLinkHint.classList.add('is-invalid');
+        }
+    }
+
+    if (receivePasteInput) {
+        receivePasteInput.addEventListener('input', updateReceiveLinkHint);
+    }
+
+    // "Paste" pastes. It was wired directly to submitReceiveLink, so it
+    // skipped the input entirely and started the download — leaving no way
+    // to see or correct the link first.
+    if (receivePasteBtn) {
+        receivePasteBtn.addEventListener('click', async () => {
+            try {
+                const text = (await navigator.clipboard.readText() || '').trim();
+                if (!text) {
+                    showToast('Clipboard is empty', 'error');
+                    return;
+                }
+                receivePasteInput.value = text;
+                receivePasteInput.focus();
+                // Put the caret at the end rather than selecting everything,
+                // so the next keystroke doesn't wipe what was just pasted.
+                receivePasteInput.setSelectionRange(text.length, text.length);
+                updateReceiveLinkHint();
+            } catch (err) {
+                // Clipboard read can be refused; typing or Ctrl+V still work.
+                showToast('Could not read the clipboard', 'error');
+            }
+        });
+    }
     if (receivePasteInput) {
         receivePasteInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') submitReceiveLink();
@@ -3166,3 +3740,356 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
     init();
 }
 
+
+// ─── Folder Contents Modal (Desktop v2, Figma screen #22) ───────────
+// Opened from a folder card's "View files" button. Replaces the old
+// inline expand on desktop: the list is a 2-column CSS grid, so
+// expanding a card in place stretched its row-neighbour to match and
+// pushed every row below it down. Mobile still uses the inline expand.
+//
+// Renders the folder's files in the same two-column card grid as the
+// main list, each row carrying a single Open button.
+(function () {
+    const overlay  = document.getElementById('folderModalOverlay');
+    if (!overlay) return;
+    const gridEl   = document.getElementById('folderModalGrid');
+    const titleEl  = document.getElementById('folderModalTitle');
+    const subEl    = document.getElementById('folderModalSub');
+    const closeBtn = document.getElementById('folderModalCloseBtn');
+    const doneBtn  = document.getElementById('folderModalDoneBtn');
+
+    const esc = (v) => window.PearUtils.escapeHtml(v == null ? '' : String(v));
+    const fmt = (n) => {
+        try { return window.PearUtils.formatBytes(n || 0); }
+        catch (e) { return (n || 0) + ' B'; }
+    };
+
+    // Files currently rendered, indexed by the row's data-file-index.
+    let currentFiles = [];
+
+    function openFolderModal(drive) {
+        currentFiles = Array.isArray(drive && drive.files) ? drive.files : [];
+        titleEl.textContent = (drive && drive.title) || 'Folder';
+
+        const total = currentFiles.reduce((a, f) => a + (f.size || 0), 0);
+        subEl.textContent = currentFiles.length
+            ? `${currentFiles.length} file${currentFiles.length !== 1 ? 's' : ''} · ${fmt(total)}`
+            : 'Empty folder';
+
+        gridEl.innerHTML = currentFiles.length
+            ? currentFiles.map((f, i) => `
+                <div class="folder-file" data-file-index="${i}">
+                    <span class="folder-file-thumb" data-file-index="${i}">${getFileIcon(f.name)}</span>
+                    <div class="folder-file-text">
+                        <div class="folder-file-name" title="${esc(f.name)}">${esc(f.name)}</div>
+                        <div class="folder-file-meta">${fmt(f.size)}</div>
+                    </div>
+                    <button type="button" class="folder-file-open" data-file-index="${i}">Open</button>
+                </div>`).join('')
+            : '<div class="folder-modal-empty">This folder has no files yet.</div>';
+
+        overlay.classList.add('active');
+        gridEl.scrollTop = 0;
+        loadFolderThumbs();
+    }
+
+    function closeFolderModal() {
+        overlay.classList.remove('active');
+    }
+
+    // Swap the emoji placeholder for a real thumbnail where main can
+    // produce one. Reuses the same cache as the drive-item file rows so
+    // a file already previewed elsewhere resolves instantly.
+    async function loadFolderThumbs() {
+        const thumbs = gridEl.querySelectorAll('.folder-file-thumb[data-file-index]');
+        for (const el of thumbs) {
+            const file = currentFiles[parseInt(el.dataset.fileIndex, 10)];
+            if (!file || !file.path) continue;
+            try {
+                let value = fileThumbnailCache.get(file.path);
+                if (!value) {
+                    // Videos get a real extracted frame here too. This path
+                    // used to call the IPC directly, so every video inside a
+                    // folder fell back to the OS icon while the same file in
+                    // the main list showed a proper frame.
+                    const isVideo = VIDEO_EXTS.has(getFileExt(file.name || file.path));
+                    value = isVideo
+                        ? await queueVideoThumb(file.path).catch(() =>
+                            window.electronAPI.getFileThumbnail(file.path))
+                        : await window.electronAPI.getFileThumbnail(file.path);
+                    cacheThumbResult(file.path, value);
+                }
+                // Only a real image preview replaces the icon — an OS shell
+                // icon is no better than our own glyph.
+                if (value && value.kind === 'image' && value.src) {
+                    el.innerHTML = `<img src="${esc(value.src)}" alt="">`;
+                }
+            } catch (_) { /* keep the glyph */ }
+        }
+    }
+
+    // Delegated: Open button, or a click anywhere on the row.
+    gridEl.addEventListener('click', async (e) => {
+        const row = e.target.closest('[data-file-index]');
+        if (!row || !gridEl.contains(row)) return;
+        const file = currentFiles[parseInt(row.dataset.fileIndex, 10)];
+        if (!file) return;
+        if (!file.path) {
+            showToast('No local path for this file yet', 'error');
+            return;
+        }
+        try {
+            const result = await window.electronAPI.openFile(file.path);
+            if (!result || result.success === false) {
+                showToast((result && result.error) || 'Could not open file', 'error');
+            }
+        } catch (err) {
+            showToast('Could not open file: ' + err.message, 'error');
+        }
+    });
+
+    closeBtn?.addEventListener('click', closeFolderModal);
+    doneBtn?.addEventListener('click', closeFolderModal);
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) closeFolderModal();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && overlay.classList.contains('active')) closeFolderModal();
+    });
+
+    window.openFolderModal  = openFolderModal;
+    window.closeFolderModal = closeFolderModal;
+})();
+
+// ─── Share Build Progress (Send modal State C + background pill) ────
+// Bridges the 'share-progress' IPC event (emitted per file by
+// createDrive) to two surfaces:
+//   • Send modal State C — while the modal is open
+//   • bottom-right pill  — when it isn't, or the user backgrounds it
+// Only one is ever visible. The pill is clickable and reopens the modal.
+(function () {
+    const modalOverlay = document.getElementById('sendModalOverlay');
+    const modalInner   = modalOverlay?.querySelector('.send-modal');
+    const fileEl       = document.getElementById('sendProgressFile');
+    const barEl        = document.getElementById('sendProgressBar');
+    const bytesEl      = document.getElementById('sendProgressBytes');
+    const percentEl    = document.getElementById('sendProgressPercent');
+    const ringEl       = document.getElementById('sendProgressRing');
+    const filesEl      = document.getElementById('sendProgressFiles');
+    const filesLabelEl = document.getElementById('sendProgressFilesLabel');
+
+    const RING_C = 326.7;   // 2 * pi * r(52), matches the CSS dasharray
+
+    // Write a numeral in place. Every value in the dial is static — no
+    // animation — so this only guards against needless DOM writes.
+    function setNum(el, value) {
+        if (!el || el.textContent === value) return;
+        el.textContent = value;
+    }
+    const bgBtn        = document.getElementById('sendProgressBgBtn');
+    const cancelBtn    = document.getElementById('sendProgressCancelBtn');
+    const pill         = document.getElementById('sharePill');
+    const pillPercent  = document.getElementById('sharePillPercent');
+
+    const fmt = (n) => window.PearUtils.formatBytes(n || 0);
+
+    let active = false;       // a share is currently building
+    let backgrounded = false; // user explicitly chose the pill
+    let bytesTotal = 0;
+    let last = { bytesDone: 0, filesDone: 0, filesTotal: 0 };
+    // Rolling throughput for the time-left estimate. Sampled rather than
+    // instantaneous so a slow chunk doesn't make the ETA jump around.
+    let currentDriveId = null;   // learned from the first progress event
+    let rateAnchor = null;   // { t, bytes }
+    let bytesPerSec = 0;
+
+    function updateRate(bytesDone) {
+        const now = Date.now();
+        if (!rateAnchor) { rateAnchor = { t: now, bytes: bytesDone }; return; }
+        const dt = now - rateAnchor.t;
+        if (dt < 700) return;                       // sample window
+        const inst = ((bytesDone - rateAnchor.bytes) * 1000) / dt;
+        // Smooth toward the new reading instead of snapping to it.
+        bytesPerSec = bytesPerSec ? (bytesPerSec * 0.6 + inst * 0.4) : inst;
+        rateAnchor = { t: now, bytes: bytesDone };
+    }
+
+    function etaText() {
+        if (!bytesPerSec || bytesTotal <= 0) return 'Estimating';
+        const left = Math.max(0, bytesTotal - last.bytesDone);
+        const secs = Math.round(left / bytesPerSec);
+        if (secs < 1) return 'Almost done';
+        if (secs < 60) return secs + 's';
+        const m = Math.floor(secs / 60);
+        if (m < 60) return m + 'm ' + (secs % 60) + 's';
+        return Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+    }
+
+    // Pill shows whenever a build is running and the modal isn't on screen.
+    function syncSurfaces() {
+        const modalOpen = !!modalOverlay?.classList.contains('active');
+        const showPill = active && (backgrounded || !modalOpen);
+        pill?.classList.toggle('is-visible', showPill);
+        modalInner?.classList.toggle('is-sharing', active && modalOpen && !backgrounded);
+    }
+
+    function render() {
+        // Bytes when we have a real total, else fall back to file count.
+        // The renderer's list can disagree with what createDrive actually
+        // writes — sharing a folder is ONE entry here but N files there —
+        // so a byte total of 0 must not pin the bar at 0 forever.
+        // filesDone/filesTotal come straight from createDrive's loop and
+        // are always correct.
+        let pct = 0;
+        if (bytesTotal > 0) {
+            pct = Math.min(100, Math.round((last.bytesDone / bytesTotal) * 100));
+        } else if (last.filesTotal > 0) {
+            pct = Math.min(100, Math.round((last.filesDone / last.filesTotal) * 100));
+        }
+        if (barEl) barEl.style.width = pct + '%';
+        if (ringEl) ringEl.style.strokeDashoffset = String(RING_C * (1 - pct / 100));
+        setNum(percentEl, String(pct));
+        setNum(pillPercent, pct + '%');
+        // "0/1" tells you nothing on a single big file — show how long is
+        // left instead. Multi-file shares keep the count, which is the more
+        // useful signal there.
+        if (last.filesTotal === 1) {
+            if (filesLabelEl) filesLabelEl.textContent = 'Time left';
+            setNum(filesEl, etaText());
+        } else {
+            if (filesLabelEl) filesLabelEl.textContent = 'Files';
+            setNum(filesEl, last.filesTotal
+                ? `${last.filesDone}/${last.filesTotal}`
+                : String(last.filesDone));
+        }
+        // Size gets its own stat block now, so it's just the value.
+        // bytesDone is always real (createDrive stats every file), so show
+        // it even when the total is unknown.
+        setNum(bytesEl, bytesTotal > 0
+            ? `${fmt(last.bytesDone)} / ${fmt(bytesTotal)}`
+            : fmt(last.bytesDone));
+    }
+
+    function begin(files) {
+        active = true;
+        backgrounded = false;
+        bytesTotal = (files || []).reduce((sum, f) => sum + (f.size || 0), 0);
+        last = { bytesDone: 0, filesDone: 0, filesTotal: (files || []).length };
+        rateAnchor = null;
+        bytesPerSec = 0;
+        currentDriveId = null;
+        if (cancelBtn) {
+            cancelBtn.disabled = false;
+            cancelBtn.textContent = 'Cancel';
+        }
+        if (fileEl) fileEl.textContent = 'Starting…';
+        render();
+        syncSurfaces();
+    }
+
+    function clearThrottle() {
+        if (renderTimer) clearTimeout(renderTimer);
+        renderTimer = null;
+        renderPending = false;
+    }
+
+    function finish() {
+        clearThrottle();
+        active = false;
+        backgrounded = false;
+        modalInner?.classList.remove('is-sharing');
+        // Close the Send modal — the Share Link modal is about to open and
+        // would otherwise stack on top of it.
+        window.closeSendModal?.();
+        syncSurfaces();
+        if (barEl) barEl.style.width = '0%';
+        if (ringEl) ringEl.style.strokeDashoffset = String(RING_C);
+    }
+
+    function fail(message) {
+        clearThrottle();
+        active = false;
+        backgrounded = false;
+        modalInner?.classList.remove('is-sharing');
+        syncSurfaces();
+        if (barEl) barEl.style.width = '0%';
+        if (message) console.error('[share] build failed:', message);
+    }
+
+    // IPC — one event per file written.
+    let renderTimer = null;
+    let renderPending = false;
+
+    // Coalesce renders to ~8/sec. createDrive emits once per file, so a
+    // 500-file share fires hundreds of updates in well under a second —
+    // faster than anyone can read, and faster than the tick animation.
+    function scheduleRender() {
+        if (renderTimer) { renderPending = true; return; }
+        render();
+        renderTimer = setTimeout(() => {
+            renderTimer = null;
+            if (renderPending) { renderPending = false; scheduleRender(); }
+        }, 125);
+    }
+
+    window.electronAPI.onShareProgress?.((_evt, data) => {
+        if (!active || !data) return;
+        if (data.driveId) currentDriveId = data.driveId;
+        last = {
+            bytesDone: data.bytesDone || 0,
+            filesDone: data.filesDone || 0,
+            // createDrive's count wins — the renderer's activeFiles length
+            // is wrong whenever a folder was expanded into many files.
+            filesTotal: data.filesTotal || last.filesTotal
+        };
+        // Trust the sender's total when the renderer's file sizes were
+        // incomplete (drag-drop entries occasionally lack `size`).
+        if (!bytesTotal && data.bytesTotal) bytesTotal = data.bytesTotal;
+        if (fileEl && data.currentFile) fileEl.textContent = data.currentFile;
+        updateRate(last.bytesDone);
+        scheduleRender();
+    });
+
+    // "Continue in background" — demote to the pill, close the modal.
+    bgBtn?.addEventListener('click', () => {
+        backgrounded = true;
+        window.closeSendModal?.();
+        syncSurfaces();
+    });
+
+    // Cancel — aborts the build. The backend deletes the partial drive, so
+    // nothing is left behind in the Shares list.
+    cancelBtn?.addEventListener('click', async () => {
+        if (!active) return;
+        cancelBtn.disabled = true;
+        cancelBtn.textContent = 'Cancelling…';
+        try {
+            await window.electronAPI.hyperdriveShareCancel?.(currentDriveId);
+        } catch (err) {
+            console.error('[share] cancel failed', err);
+            cancelBtn.disabled = false;
+            cancelBtn.textContent = 'Cancel';
+        }
+        // startShare()'s rejection path calls fail(), which tears the
+        // progress state down — no need to do it here.
+    });
+
+    // Clicking the pill returns to the modal.
+    pill?.addEventListener('click', () => {
+        backgrounded = false;
+        window.openSendModal?.();
+        syncSurfaces();
+    });
+
+    // Closing the modal mid-build (X, Escape, backdrop) demotes to the
+    // pill rather than losing the progress. Watched via the overlay's
+    // class rather than patching every close path.
+    if (modalOverlay) {
+        new MutationObserver(syncSurfaces).observe(modalOverlay, {
+            attributes: true,
+            attributeFilter: ['class']
+        });
+    }
+
+    window.shareProgress = { begin, finish, fail };
+})();

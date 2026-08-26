@@ -32,6 +32,9 @@
  * onPeerConnected(cb) - Peer joined
  * onPeerDisconnected(cb) - Peer left
  * onUploadProgress(cb) - Transfer progress
+ * onShareProgress(cb) - Share build progress (per file)
+ * hyperdriveShareCancel(driveId) - Abort an in-flight share build
+ * hyperdriveDownloadCancel(driveId) - Abort an in-flight download
  * onUploadComplete(cb) - Transfer complete
  * onDownloadPeerDisconnected(cb) - Sender went offline
  * onDriveReadyToDownload(cb) - Resumed drive ready to continue download
@@ -103,6 +106,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onPeerConnected: (callback) => ipcRenderer.on('peer-connected', callback),
     onPeerDisconnected: (callback) => ipcRenderer.on('peer-disconnected', callback),
     onUploadProgress: (callback) => ipcRenderer.on('upload-progress', callback),
+    onShareProgress: (callback) => ipcRenderer.on('share-progress', callback),
+    hyperdriveShareCancel: (driveId) => ipcRenderer.invoke('hyperdrive-share-cancel', { driveId }),
+    hyperdriveDownloadCancel: (driveId) => ipcRenderer.invoke('hyperdrive-download-cancel', { driveId }),
     onUploadComplete: (callback) => ipcRenderer.on('upload-complete', callback),
     onDownloadPeerDisconnected: (callback) => ipcRenderer.on('download-peer-disconnected', callback),
     onDriveReadyToDownload: (callback) => ipcRenderer.on('drive-ready-to-download', callback),

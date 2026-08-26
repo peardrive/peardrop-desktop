@@ -13,6 +13,7 @@
  * 'hyperdrive-check-duplicate' - Fast local duplicate check
  * 'hyperdrive-open' - Connect to remote drive (includes dedup check)
  * 'hyperdrive-download' - Download files from opened drive
+ * 'hyperdrive-download-cancel' - Abort an in-flight download
  *   HyperdriveManager (UI Interface):
  * 'drive-get' - Get single drive by ID
  * 'drives-list' - Get all tracked drives
@@ -34,6 +35,8 @@
  * 'peer-connected' - Peer joined (upload) or download starting
  * 'peer-disconnected' - Peer left
  * 'upload-progress' - Transfer progress update
+ * 'share-progress' - Per-file progress while a share is being built
+ * 'hyperdrive-share-cancel' - Abort an in-flight share build
  * 'upload-complete' - Transfer finished
  * 'files-downloaded' - Download complete with file list
  * 'drives-updated' - Drive added/removed/changed
@@ -252,6 +255,16 @@ function setupIPC() {
     // ========================================================================
 
     // Create a shareable link for files
+    // Cancel an in-flight share build. driveId comes from the
+    // 'share-progress' event the renderer is already receiving.
+    ipcMain.handle('hyperdrive-share-cancel', async (event, { driveId }) => {
+        try {
+            return { success: hyperdriveManager.cancelShare(driveId) };
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
+    });
+
     ipcMain.handle('hyperdrive-share', async (event, { files, options = {} }) => {
         try {
             // Sanitize incoming paths at the boundary. Renderer-provided paths
@@ -268,7 +281,11 @@ function setupIPC() {
 
             const result = await hyperdriveManager.createDrive(safeFiles, {
                 ttlMs: options.ttlMs || 0,
-                name: options.name
+                name: options.name,
+                // Denominator for the 'share-progress' percentage. Additive
+                // only — createDrive ignores it apart from echoing it back
+                // in the progress payload.
+                totalBytes: safeFiles.reduce((sum, f) => sum + (f.size || 0), 0)
             });
             
             console.log('[PearDrop] Share created:', result.shareLink);
@@ -310,6 +327,10 @@ function setupIPC() {
                 driveEntryId: driveEntry.id
             };
         } catch (error) {
+            if (error && error.cancelled) {
+                console.log('[PearDrop] Share cancelled by user');
+                return { success: false, cancelled: true, error: 'Share cancelled' };
+            }
             console.error('[PearDrop] Share failed:', error);
             return { success: false, error: error.message };
         }
@@ -399,7 +420,124 @@ function setupIPC() {
 
     // Download files from an opened drive
     // Uses lib/downloader.js (✅ SAFE module - can be modified without touching sacred code)
+    // Downloads the user asked to cancel. downloadFromDrive polls this via
+    // its isCancelled callback. Removing the drive entry alone did NOT stop
+    // the transfer — the loop kept going and the file finished anyway.
+    const cancelledDownloads = new Set();
+    // Downloads whose loop is still running. Lets the cancel handler tell
+    // "stop it" apart from "it already finished, so delete what it made".
+    const activeDownloads = new Set();
+    // driveId -> { root, isOwnFolder }. Recorded before the first byte is
+    // written, so cleanup works no matter how the download ends.
+    const downloadRoots = new Map();
+    // driveId -> abort fn for the file currently streaming. Lets cancel be
+    // immediate instead of waiting for the next chunk or the stall timeout.
+    const downloadAborters = new Map();
+
+    // Delete everything a cancelled download produced. Uses the recorded
+    // root rather than the error's payload, because a download killed by its
+    // storage being torn down throws an error carrying no file list at all.
+    async function purgeCancelledDownload(driveId, knownFiles) {
+        const info = downloadRoots.get(driveId);
+        downloadRoots.delete(driveId);
+        // A just-destroyed write stream can still hold the file open for a
+        // moment on Windows, where deleting an open file fails with EBUSY /
+        // EPERM. Retry briefly rather than giving up on the first attempt.
+        const rmWithRetry = async (target, opts) => {
+            for (let attempt = 0; attempt < 5; attempt++) {
+                try {
+                    await fs.rm(target, { force: true, ...opts });
+                    return true;
+                } catch (err) {
+                    if (attempt === 4) {
+                        console.warn('[PearDrop] Could not remove', target, err.message);
+                        return false;
+                    }
+                    await new Promise(r => setTimeout(r, 120));
+                }
+            }
+            return false;
+        };
+
+        // NOTE: no early `return` in here. An earlier version returned after
+        // removing the folder, which skipped the manifest cleanup and the
+        // 'removed' event below — so a cancelled folder share deleted its
+        // files but left the row on screen.
+        if (info && info.isOwnFolder && info.root) {
+            if (await rmWithRetry(info.root, { recursive: true })) {
+                console.log('[PearDrop] Removed cancelled download folder', info.root);
+            }
+        } else {
+            for (const f of (knownFiles || [])) {
+                const target = f && (f.path || f.destPath);
+                if (!target) continue;
+                if (await rmWithRetry(target)) {
+                    console.log('[PearDrop] Removed cancelled download file', target);
+                }
+            }
+        }
+
+        // Remove the manifest entry only.
+        //
+        // Deliberately NOT calling stopDrive({ delete: true }) here. That
+        // tears down the live swarm session and corestore — the sacred path
+        // — while this drive was mid-transfer moments ago, and doing it from
+        // a cancel raced the engine's own teardown. Leaving the session alone
+        // costs an idle session until the app closes; ripping it out mid-
+        // flight destabilised the whole manager. Storage is reclaimed by the
+        // normal remove path, which runs when nothing is in flight.
+        try {
+            await hyperdriveManager.removeDriveEntry(driveId, {
+                deleteFiles: false,      // files already handled above
+                deleteStorage: false
+            });
+        } catch (err) {
+            console.warn('[PearDrop] Cancelled-download entry removal failed:', err.message);
+        }
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('drives-updated', { action: 'removed', id: driveId });
+        }
+    }
+
+    ipcMain.handle('hyperdrive-download-cancel', async (event, { driveId }) => {
+        if (!driveId) return { success: false };
+        cancelledDownloads.add(driveId);
+        console.log('[PearDrop] Download cancel requested', { driveId });
+
+        // Kill the in-flight stream right now. Without this the loop only
+        // notices on the next chunk — and on a stalled transfer, not until
+        // the stall timeout.
+        const abort = downloadAborters.get(driveId);
+        if (abort) {
+            downloadAborters.delete(driveId);
+            try { abort(); } catch (err) { console.warn('[PearDrop] Abort failed:', err.message); }
+        }
+
+        // Already finished before the cancel landed? Then there is no loop to
+        // stop — the user asked for this download to go away, so the files it
+        // produced go away too. Cancelling means "I don't want this", not "I
+        // don't want the rest of it".
+        if (!activeDownloads.has(driveId)) {
+            try {
+                // Same restraint as above: no stopDrive() from a cancel.
+                await hyperdriveManager.removeDriveEntry(driveId, {
+                    deleteFiles: true,
+                    deleteStorage: false
+                });
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('drives-updated', { action: 'removed', id: driveId });
+                }
+                console.log('[PearDrop] Cancelled an already-finished download; files deleted', { driveId });
+            } catch (err) {
+                console.warn('[PearDrop] Post-completion cancel cleanup failed', err.message);
+            }
+        }
+        return { success: true };
+    });
+
     ipcMain.handle('hyperdrive-download', async (event, { driveId, destDir, fileNames }) => {
+        cancelledDownloads.delete(driveId);   // fresh attempt
+        activeDownloads.add(driveId);
         try {
             const session = hyperdriveManager.activeDrives.get(driveId);
             if (!session) {
@@ -461,9 +599,28 @@ function setupIPC() {
                 
                 onError: (data) => {
                     console.error('[PearDrop] File error:', data);
-                }
+                },
+                isCancelled: () => cancelledDownloads.has(driveId),
+                onRoot: (root, isOwnFolder) => downloadRoots.set(driveId, { root, isOwnFolder }),
+                registerAborter: (fn) => downloadAborters.set(driveId, fn)
             });
             
+            // Cancelled while the loop was still running? The isCancelled
+            // check only fires BETWEEN files, so a cancel arriving during the
+            // last (or only) file lets the loop finish normally — and the
+            // success path below would then announce "Download complete" and
+            // link to a file the user explicitly cancelled.
+            if (cancelledDownloads.has(driveId)) {
+                activeDownloads.delete(driveId);
+                downloadAborters.delete(driveId);
+                cancelledDownloads.delete(driveId);
+                console.log('[PearDrop] Download finished but was cancelled — discarding', { driveId });
+                // Cleanup happens HERE, after the loop has stopped — never
+                // concurrently from the remove path, which raced the writer.
+                await purgeCancelledDownload(driveId, result.files);
+                return { success: false, cancelled: true, error: 'Download cancelled' };
+            }
+
             // Add to drives state (single source of truth)
             const driveEntry = await hyperdriveManager.addDriveEntry({
                 id: driveId,
@@ -502,8 +659,26 @@ function setupIPC() {
                 });
             }
             
+            activeDownloads.delete(driveId);
+            downloadAborters.delete(driveId);
+            downloadRoots.delete(driveId);
             return { success: true, files: result.files, downloadPath, driveId: driveEntry.id };
         } catch (error) {
+            activeDownloads.delete(driveId);
+            downloadAborters.delete(driveId);
+            // `error.cancelled` alone is not enough: tearing down the drive
+            // storage mid-download throws an ordinary error, and that used to
+            // skip cleanup entirely. If the user asked to cancel, treat ANY
+            // failure from this point as the cancellation.
+            if ((error && error.cancelled) || cancelledDownloads.has(driveId)) {
+                cancelledDownloads.delete(driveId);
+                console.log('[PearDrop] Download cancelled by user', { driveId });
+                // Clean up what had already been written. The loop has
+                // stopped by the time we get here, so there is no writer to
+                // race — unlike deleting from the renderer's remove call.
+                await purgeCancelledDownload(driveId, error.partialFiles);
+                return { success: false, cancelled: true, error: 'Download cancelled' };
+            }
             console.error('[PearDrop] Download failed:', error);
             // Receive-path handler: attach structured errorDetail when the
             // error is typed. See hyperdrive-open handler above for the
@@ -637,6 +812,31 @@ function setupIPC() {
         try {
             console.log('[PearDrop] Removing drive', { id, deleteFiles });
             
+            // Capture the file list BEFORE anything can destroy the entry.
+            // stopDrive({ delete: true }) does `delete manifest.drives[id]`,
+            // so removeDriveEntry() then found nothing, returned early, and
+            // never ran its delete loop — which is why the "also delete the
+            // file" checkbox appeared to do nothing on a seeding download
+            // (the only kind that HAS a live session to stop).
+            const entryBefore = hyperdriveManager.manifest?.drives?.[id];
+
+            // HARD RULE: only ever delete files PearDrop downloaded.
+            // A share points at the user's own file, wherever they picked it
+            // from — Desktop, a project folder, an external drive. Removing a
+            // share means removing it from the list, nothing more. Enforced
+            // here rather than trusting the dialog, so no future caller can
+            // pass deleteFiles:true for an upload and wipe someone's
+            // original.
+            const isUploadEntry = !!(entryBefore && entryBefore.isUpload);
+            if (deleteFiles && isUploadEntry) {
+                console.warn('[PearDrop] Refusing to delete files for a SHARE (upload) — list removal only', { id });
+            }
+            const reallyDeleteFiles = deleteFiles && !isUploadEntry;
+
+            const filesToDelete = reallyDeleteFiles && entryBefore
+                ? (entryBefore.files || []).slice()
+                : [];
+
             // Stop if active
             const session = hyperdriveManager.activeDrives.get(id);
             if (session) {
@@ -646,9 +846,21 @@ function setupIPC() {
             
             // Remove via drive state (handles storage + optional file deletion)
             const success = await hyperdriveManager.removeDriveEntry(id, { 
-                deleteFiles, 
+                deleteFiles: reallyDeleteFiles, 
                 deleteStorage: true 
             });
+
+            // Delete anything removeDriveEntry could not, because the entry
+            // was already gone by the time it looked.
+            for (const file of filesToDelete) {
+                if (!file || !file.path) continue;
+                try {
+                    await fs.rm(file.path, { force: true });
+                    console.log('[PearDrop] Deleted downloaded file', file.path);
+                } catch (err) {
+                    console.warn('[PearDrop] Could not delete file', file.path, err.message);
+                }
+            }
             
             console.log('[DEBUG] removeDriveEntry result:', {
                 id,
@@ -907,6 +1119,19 @@ app.whenReady().then(async () => {
             }
         });
         
+        // Share-build progress — emitted per file while createDrive() writes
+        // the selected files into the drive. Distinct from 'upload-progress',
+        // which is about peers downloading an already-built share.
+        hyperdriveManager.on('share-progress', (data) => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('share-progress', {
+                    ...data,
+                    bytesFormatted: formatBytes(data.bytesDone),
+                    totalFormatted: formatBytes(data.bytesTotal)
+                });
+            }
+        });
+
         hyperdriveManager.on('upload-complete', (data) => {
             if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send('upload-complete', data);

@@ -246,6 +246,66 @@
         #listContainer.view-receive .scroll-list-slot[data-type="share"] {
             display: none;
         }
+        /* Favorites tab — hide everything that isn't starred. Same CSS-only
+           approach as the view-share / view-receive filters above, so
+           switching tabs costs no re-render. */
+        #listContainer.view-favorites .scroll-list-slot:not([data-fav="true"]) {
+            display: none;
+        }
+
+        /* Empty state. The library's own .scroll-list-empty only fires when
+           the list has zero items — here the items exist but are filtered
+           out, so it never would. :has() lets CSS answer "are there any
+           starred slots?" without JS bookkeeping. */
+        .favorites-empty {
+            display: none;
+        }
+        #listContainer.view-favorites:not(:has(.scroll-list-slot[data-fav="true"])) .favorites-empty {
+            display: flex;
+            position: absolute;
+            inset: 0;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            text-align: center;
+            padding: 28px 20px;
+            pointer-events: none;
+        }
+        /* Suppress the library's empty state in this tab so the two can
+           never show at once. */
+        #listContainer.view-favorites .scroll-list-empty {
+            display: none;
+        }
+        /* Hide the centre column rule when there is nothing to separate —
+           otherwise a stray vertical line runs straight through the empty
+           state. Two cases: the Favorites tab with nothing starred, and any
+           view where the library has flagged the list as genuinely empty. */
+        #listContainer.view-favorites:not(:has(.scroll-list-slot[data-fav="true"])) .scroll-list::before,
+        #listContainer:has(.scroll-list-empty.visible) .scroll-list::before {
+            display: none;
+        }
+        .favorites-empty-icon {
+            width: 46px;
+            height: 46px;
+            color: #f5c93a;
+            opacity: 0.85;
+            filter: drop-shadow(0 3px 12px rgba(245, 201, 58, 0.28));
+        }
+        .favorites-empty-icon svg {
+            width: 100%;
+            height: 100%;
+        }
+        .favorites-empty-title {
+            font-size: 17px;
+            font-weight: 700;
+            color: #fff;
+        }
+        .favorites-empty-text {
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.45);
+            max-width: 280px;
+        }
 
         /* Bottom bar wrapper — only the action buttons live here now.
            Mobile-UI lays it out as a normal block at the bottom of .app. */
@@ -826,7 +886,7 @@
                 left: calc(50% - 4px);
                 transform: translateX(-50%);
                 width: 1px;
-                background: rgba(255, 255, 255, 0.05);
+                background: rgba(255, 255, 255, 0.10);
                 pointer-events: none;
             }
 
@@ -944,6 +1004,17 @@
             .modal-overlay .modal {
                 max-width: 760px;
                 min-height: 520px;
+                /* Every modal is the SAME height — 520px, same standard as
+                   the 760px width. Content longer than that scrolls
+                   INSIDE the modal; the shell never grows. Without this
+                   cap a long list (folder contents, send review) made the
+                   modal outgrow every other modal, and the inner
+                   `overflow-y: auto` never engaged because its parent kept
+                   expanding to fit.
+                   The min() only kicks in on a window shorter than 560px,
+                   so the modal degrades instead of overflowing the screen
+                   (40px = the overlay's 20px top and bottom padding). */
+                max-height: min(520px, calc(100vh - 40px));
                 /* App-wide iOS-frosted-glass recipe — Amir tuned this
                    on the kebab menu ("the best glass by far") and asked
                    for it applied everywhere. Denser tints / heavier
@@ -965,15 +1036,250 @@
                 min-height: 0;
                 padding: 22px 22px 20px;
             }
-            /* Modal overlay scrim — 50% dim on the page behind every
-               modal so the modal's iOS-frosted-glass reads against a
-               calmer background. Applied globally after Amir validated
-               the strength on the Send modal.
+            /* Modal overlay scrim — 75% dim on the page behind every modal
+               so the modal's iOS-frosted-glass reads against a calmer
+               background. Tuned by eye once it actually rendered (the rule
+               below was dead until the `body` prefix was added).
                NO backdrop-filter here — the modal itself provides the
                blur. Nested backdrop-filter cancels out (blurring
                already-blurred content). */
-            .modal-overlay {
-                background: rgba(0, 0, 0, 0.50);
+            /* `body ` prefix is REQUIRED, not cosmetic. The base
+               `.modal-overlay { background: transparent }` rule lives at
+               the top level LATER in this file (~line 3775). Same
+               specificity (0,1,0) + later in source order = it wins, and
+               a media query adds no specificity of its own. Without the
+               prefix this scrim silently never renders. */
+            body .modal-overlay {
+                background: rgba(0, 0, 0, 0.75);
+            }
+
+            /* ── Share build progress (State C) ─────────────────────
+               iOS-style: one big determinate dial, bold STATIC labels,
+               and only the numerals animating when they change. */
+            .send-progress {
+                display: none;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                flex: 1;
+                gap: 10px;
+                text-align: center;
+                padding: 8px 40px;
+            }
+            .send-modal.is-sharing .send-add-files-card,
+            .send-modal.is-sharing .send-file-review,
+            .send-modal.is-sharing .send-recent {
+                display: none;
+            }
+            .send-modal.is-sharing .send-progress {
+                display: flex;
+            }
+
+            /* Dial */
+            .send-progress-dial {
+                position: relative;
+                width: 148px;
+                height: 148px;
+                /* Breathing room so the glow has somewhere to fall off
+                   instead of running straight into the title below. */
+                margin: 6px 0 14px;
+            }
+            .send-progress-dial-svg {
+                width: 100%;
+                height: 100%;
+                transform: rotate(-90deg);   /* start at 12 o'clock */
+                /* SVG clips to its viewport by default. The ring's outer
+                   edge is at 56.5 of a 120 box, so a 6px blur had ~3.5
+                   units of room and got cut off. Let it paint outside. */
+                overflow: visible;
+            }
+            .send-progress-track,
+            .send-progress-fill {
+                fill: none;
+                stroke-width: 9;
+                stroke-linecap: round;
+            }
+            .send-progress-track {
+                stroke: rgba(255, 255, 255, 0.10);
+            }
+            .send-progress-fill {
+                stroke: #a8ce38;
+                stroke-dasharray: 326.7;      /* 2 * pi * r(52) */
+                stroke-dashoffset: 326.7;     /* full = empty ring */
+                /* Two-stop glow: a tight core plus a wider falloff, now that
+                   there's room for it to actually render. */
+                filter: drop-shadow(0 0 5px rgba(143, 216, 79, 0.75))
+                        drop-shadow(0 0 14px rgba(143, 216, 79, 0.40));
+                transition: stroke-dashoffset 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+            }
+            /* Centred value — big and bold, iOS scale. */
+            .send-progress-dial-value {
+                position: absolute;
+                inset: 0;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 1px;
+                font-size: 42px;
+                font-weight: 700;
+                letter-spacing: -1.5px;
+                color: #fff;
+            }
+            .send-progress-pct {
+                font-size: 20px;
+                font-weight: 700;
+                color: rgba(255, 255, 255, 0.45);
+                /* Sits beside the number, not above it. align-self:flex-start
+                   + margin-top was floating it at the top of the circle. */
+                transform: translateY(3px);
+            }
+
+            /* Tabular figures so digits never jitter as values change. */
+            .send-progress-num {
+                font-variant-numeric: tabular-nums;
+                display: inline-block;
+            }
+            /* Numerals are static — tabular figures only, no animation.
+               Values change in place. */
+
+            .send-progress-title {
+                font-size: 20px;
+                font-weight: 700;
+                letter-spacing: -0.3px;
+                color: #fff;
+            }
+            .send-progress-file {
+                font-size: 13px;
+                font-weight: 500;
+                color: rgba(255, 255, 255, 0.45);
+                max-width: 100%;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+
+            /* Static-label / moving-number stat pair. */
+            .send-progress-stats {
+                display: flex;
+                align-items: center;
+                gap: 26px;
+                margin-top: 6px;
+            }
+            .send-progress-stat {
+                min-width: 108px;
+            }
+            .send-progress-stat-label {
+                font-size: 11px;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.09em;
+                color: rgba(255, 255, 255, 0.40);
+            }
+            .send-progress-stat-value {
+                margin-top: 3px;
+                font-size: 19px;
+                font-weight: 700;
+                letter-spacing: -0.3px;
+                color: #fff;
+            }
+            .send-progress-stat-div {
+                width: 2px;
+                height: 30px;
+                border-radius: 1px;
+                background: rgba(255, 255, 255, 0.10);
+            }
+
+            .send-progress-actions {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                margin-top: 12px;
+            }
+            /* Destructive-outline: red border + red text, same geometry as
+               the secondary button beside it. */
+            .send-progress-cancel-btn {
+                height: 38px;
+                padding: 0 20px;
+                border-radius: 12px;
+                background: transparent;
+                border: 2px solid rgba(239, 74, 95, 0.55);
+                color: #ef4a5f;
+                font-family: inherit;
+                font-size: 13px;
+                font-weight: 700;
+                cursor: pointer;
+                transition: border-color 0.15s ease, background 0.15s ease;
+            }
+            .send-progress-cancel-btn:hover {
+                border-color: rgba(239, 74, 95, 0.9);
+                background: rgba(239, 74, 95, 0.12);
+            }
+            .send-progress-cancel-btn:disabled {
+                opacity: 0.5;
+                cursor: default;
+            }
+            .send-progress-bg-btn {
+                height: 38px;
+                padding: 0 20px;
+                border-radius: 12px;
+                background: transparent;
+                border: 2px solid rgba(255, 255, 255, 0.18);
+                color: rgba(255, 255, 255, 0.75);
+                font-family: inherit;
+                font-size: 13px;
+                font-weight: 700;
+                cursor: pointer;
+                transition: border-color 0.15s ease, color 0.15s ease;
+            }
+            .send-progress-bg-btn:hover {
+                border-color: rgba(255, 255, 255, 0.34);
+                color: #fff;
+            }
+
+            /* ── Background share pill (bottom-right) ────────────────── */
+            .share-pill {
+                display: none;
+                position: fixed;
+                right: 22px;
+                bottom: 22px;
+                z-index: 1200;      /* above modals' 1000 so it survives a close */
+                align-items: center;
+                gap: 10px;
+                height: 44px;
+                padding: 0 18px;
+                border-radius: 999px;
+                background: rgba(30, 32, 28, 0.92);
+                border: 2px solid rgba(168, 206, 56, 0.45);
+                color: #fff;
+                font-size: 13px;
+                font-weight: 700;
+                cursor: pointer;
+                box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+            }
+            .share-pill.is-visible {
+                display: inline-flex;
+            }
+            .share-pill:hover {
+                border-color: rgba(168, 206, 56, 0.8);
+            }
+            /* Blinking glowing circle. */
+            .share-pill-dot {
+                width: 11px;
+                height: 11px;
+                border-radius: 50%;
+                background: #a8ce38;
+                box-shadow: 0 0 10px rgba(168, 206, 56, 0.9);
+                animation: share-pulse 1.25s ease-in-out infinite;
+            }
+            .share-pill-percent {
+                color: #a8ce38;
+                font-variant-numeric: tabular-nums;
+            }
+            @media (prefers-reduced-motion: reduce) {
+                .send-progress-ring,
+                .share-pill-dot {
+                    animation: none;
+                }
             }
 
             .send-modal {
@@ -1186,8 +1492,12 @@
                 display: block;
             }
             .send-recent-divider {
-                height: 1px;
-                background: rgba(255, 255, 255, 0.06);
+                /* Section break between Add Files and Recent Shares — heavier
+                   than the row separators inside the grid, so it reads as a
+                   division between sections rather than between rows. */
+                height: 2px;
+                border-radius: 1px;
+                background: rgba(255, 255, 255, 0.48);
                 margin-bottom: 16px;
             }
             .send-recent-header {
@@ -1196,13 +1506,67 @@
                 color: #ffffff;
                 margin-bottom: 12px;
             }
+            /* Mirrors the main drives list: equal minmax(0,1fr) columns,
+               a centre column rule, and row separators shifted toward it. */
             .send-recent-grid {
                 display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 8px;
-                max-height: 240px;
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+                gap: 28px 24px;          /* generous row gap = air around the rule */
+                max-height: 320px;       /* taller rows need more room before scrolling */
                 overflow-y: auto;
+                overscroll-behavior: contain;
+                /* Centre rule as a background, not a ::before — a ::before
+                   inside a scroll container scrolls away with the rows.
+                   Same fix as the folder modal's grid. */
+                background-image: linear-gradient(
+                    to right,
+                    transparent calc(50% - 0.5px),
+                    rgba(255, 255, 255, 0.10) calc(50% - 0.5px),
+                    rgba(255, 255, 255, 0.10) calc(50% + 0.5px),
+                    transparent calc(50% + 0.5px));
+                background-repeat: no-repeat;
+                /* Inset top and bottom so the centre rule doesn't run flush
+                   into the section divider above or the modal edge below. */
+                background-position: 0 6px;
+                background-size: 100% calc(100% - 12px);
+                padding: 2px 0;
             }
+            .send-recent-grid:empty { background-image: none; }
+            /* Row separators — indices 0 and 1 are the first row, so they
+               get none. Offsets mirror the main list: pulled toward the
+               centre rule, trimmed at the outer edge. */
+            .send-recent-item {
+                position: relative;
+            }
+            .send-recent-item:not([data-idx="0"]):not([data-idx="1"])::before {
+                content: '';
+                position: absolute;
+                top: -14px;                /* dead centre of the 28px row gap */
+                height: 1px;
+                background: rgba(255, 255, 255, 0.10);
+                pointer-events: none;
+            }
+            /* Short rules — they mark the row break without competing with
+               the centre column rule. Still shifted toward the centre, so
+               the inner end sits close to it and the outer end pulls well
+               back from the card edge. */
+            .send-recent-item[data-col="left"]::before  { left: 32%; right: 8%; }
+            .send-recent-item[data-col="right"]::before { left: 8%; right: 32%; }
+
+            /* Icon slots — same treatment as the drive-item thumbnails. */
+            .send-recent-thumb-folder,
+            .send-recent-thumb-fileicon {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                width: 100%;
+                height: 100%;
+            }
+            .send-recent-thumb-folder {
+                color: #6ee0d3;            /* teal folder, matches the list */
+            }
+            .send-recent-thumb-folder svg { width: 88%; height: 88%; }
+            .send-recent-thumb-fileicon svg { width: 78%; height: 78%; }
             .send-recent-empty {
                 display: none;
                 font-size: 13px;
@@ -1216,20 +1580,32 @@
                 display: flex;
                 align-items: center;
                 gap: 12px;
-                padding: 6px 4px;
-                overflow: hidden;
+                /* Taller rows — 6px top/bottom made the cards sit almost
+                   flush against the separators. */
+                padding: 14px 6px;
+                /* NOT overflow:hidden — the row separator ::before sits
+                   outside the box and was being clipped. The filename
+                   handles its own ellipsis. */
+                position: relative;
             }
+            /* Matches body #listContainer .drive-item .drive-item-thumb. */
             .send-recent-item-thumb {
-                width: 44px;
-                height: 44px;
+                width: 56px;
+                height: 56px;
+                min-width: 56px;
                 display: inline-flex;
                 align-items: center;
                 justify-content: center;
                 background: rgba(255, 255, 255, 0.06);
-                border-radius: 8px;
-                font-size: 20px;
+                border-radius: 12px;
                 flex-shrink: 0;
                 overflow: hidden;
+            }
+            /* Folder / file-type icons sit on no plate — same as the list,
+               so the SVG's own colour carries the shape. */
+            .send-recent-item-thumb.is-folder,
+            .send-recent-item-thumb:has(.send-recent-thumb-fileicon) {
+                background: transparent;
             }
             .send-recent-item-thumb img {
                 width: 100%;
@@ -1347,6 +1723,22 @@
             .receive-paste-btn:active {
                 filter: brightness(0.95);
             }
+            .receive-link-hint {
+                display: none;
+                margin: 8px 2px 0;
+                font-size: 12.5px;
+                font-weight: 600;
+                letter-spacing: 0.1px;
+            }
+            .receive-link-hint.is-valid {
+                display: block;
+                color: #a8ce38;
+            }
+            .receive-link-hint.is-invalid {
+                display: block;
+                color: #ef4a5f;
+            }
+
             .receive-or-divider {
                 display: flex;
                 align-items: center;
@@ -1842,6 +2234,206 @@
             }
 
             /* ============================================================
+               FOLDER CONTENTS MODAL (Desktop v2, Figma screen #22)
+               Opened by a folder card's "View files" button. Shell
+               (width, glass, radius) comes from the canonical .modal
+               rule; only INTERNAL layout lives here.
+               ============================================================ */
+            .folder-modal {
+                padding: 22px 28px 24px;
+                display: flex;
+                flex-direction: column;
+                gap: 18px;
+            }
+            .folder-modal-header {
+                display: flex;
+                align-items: flex-start;
+                justify-content: space-between;
+                gap: 16px;
+            }
+            .folder-modal-heading {
+                display: flex;
+                align-items: center;
+                gap: 14px;
+                min-width: 0;
+            }
+            /* Teal folder mark — same colour language the list uses to
+               mark a folder row. */
+            .folder-modal-icon {
+                flex-shrink: 0;
+                width: 46px;
+                height: 46px;
+                border-radius: 12px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                background: rgba(45, 190, 190, 0.14);
+                color: #2dbebe;
+            }
+            .folder-modal-icon svg { width: 24px; height: 24px; }
+            .folder-modal-heading-text { min-width: 0; }
+            .folder-modal-title {
+                margin: 0;
+                font-size: 20px;
+                font-weight: 700;
+                color: #fff;
+                letter-spacing: -0.2px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .folder-modal-sub {
+                margin-top: 3px;
+                font-size: 13px;
+                color: rgba(255, 255, 255, 0.55);
+            }
+            /* Identical to .send-modal-close / .receive close — red 2px
+               outlined square. Was a grey filled circle, so the folder
+               modal was the odd one out. */
+            .folder-modal-close {
+                flex-shrink: 0;
+                width: 32px;
+                height: 32px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                background: transparent;
+                border: 2px solid rgba(255, 100, 100, 0.75);
+                border-radius: 8px;
+                color: rgba(255, 100, 100, 0.95);
+                font-size: 20px;
+                font-weight: 700;
+                line-height: 1;
+                cursor: pointer;
+                transition: background 0.15s ease, border-color 0.15s ease;
+            }
+            .folder-modal-close:hover {
+                background: rgba(255, 100, 100, 0.12);
+                border-color: rgba(255, 100, 100, 0.9);
+            }
+
+            /* Two-column card grid — mirrors the main list. minmax(0,1fr)
+               for the same reason as the list: plain 1fr lets a long
+               filename widen its column and drift the centre separator. */
+            .folder-modal-grid {
+                flex: 1;
+                min-height: 0;
+                overflow-y: auto;
+                overscroll-behavior: contain;
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+                gap: 10px 26px;
+                align-content: start;
+                padding-right: 6px;
+                /* Centre separator painted as the element's own background
+                   rather than an absolutely-positioned ::before — a ::before
+                   inside a scroll container scrolls away with the rows,
+                   leaving the line short. An element background stays put. */
+                background-image: linear-gradient(
+                    to right,
+                    transparent calc(50% - 0.5px),
+                    rgba(255, 255, 255, 0.10) calc(50% - 0.5px),
+                    rgba(255, 255, 255, 0.10) calc(50% + 0.5px),
+                    transparent calc(50% + 0.5px));
+                background-repeat: no-repeat;
+            }
+            .folder-modal-grid:empty { background-image: none; }
+            /* Thin scrollbar, same language as the drive-item file list. */
+            .folder-modal-grid::-webkit-scrollbar {
+                width: 6px;
+            }
+            .folder-modal-grid::-webkit-scrollbar-track {
+                background: transparent;
+            }
+            .folder-modal-grid::-webkit-scrollbar-thumb {
+                background: rgba(255, 255, 255, 0.16);
+                border-radius: 3px;
+            }
+            .folder-modal-grid::-webkit-scrollbar-thumb:hover {
+                background: rgba(255, 255, 255, 0.28);
+            }
+            .folder-modal-empty {
+                grid-column: 1 / -1;
+                text-align: center;
+                padding: 32px 0;
+                font-size: 14px;
+                color: rgba(255, 255, 255, 0.45);
+            }
+
+            /* File row — separators only, no card borders (Figma). */
+            .folder-file {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                min-width: 0;
+                padding: 8px 4px;
+                border-radius: 10px;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+            }
+            .folder-file:hover { background: rgba(255, 255, 255, 0.04); }
+            .folder-file-thumb {
+                flex-shrink: 0;
+                width: 42px;
+                height: 42px;
+                border-radius: 9px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                background: rgba(255, 255, 255, 0.07);
+                font-size: 19px;
+                overflow: hidden;
+            }
+            .folder-file-thumb img {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+            }
+            .folder-file-text { min-width: 0; flex: 1; }
+            .folder-file-name {
+                font-size: 14px;
+                font-weight: 600;
+                color: #fff;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .folder-file-meta {
+                margin-top: 2px;
+                font-size: 12px;
+                color: rgba(255, 255, 255, 0.5);
+            }
+            /* Open pill — same outlined-green language as the list rows. */
+            .folder-file-open {
+                flex-shrink: 0;
+                min-width: 72px;
+                height: 32px;
+                padding: 0 16px;
+                /* Same squircle + gradient as the list-row Open button. */
+                border-radius: 11px;
+                background: linear-gradient(180deg,
+                                rgba(72, 98, 40, 0.62) 0%,
+                                rgba(36, 48, 22, 0.78) 100%);
+                border: 2px solid rgba(168, 206, 56, 0.55);
+                color: #a8ce38;
+                font-family: inherit;
+                font-size: 13px;
+                font-weight: 700;
+                cursor: pointer;
+                transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+            }
+            .folder-file-open:hover {
+                background: linear-gradient(180deg,
+                                rgba(96, 128, 52, 0.72) 0%,
+                                rgba(48, 64, 28, 0.85) 100%);
+                border-color: rgba(168, 206, 56, 0.85);
+            }
+            .folder-file-open:active { transform: scale(0.96); }
+            .folder-modal-actions {
+                display: flex;
+                justify-content: flex-end;
+            }
+
+            /* ============================================================
                FILE INFO MODAL (Desktop v2, Figma screen #19)
                Opened by the drive-card 3-dot menu → Properties. Shell
                (width, glass, radius) comes from the canonical .modal rule;
@@ -2129,32 +2721,124 @@
             }
 
             /* Send + Receive — green outline pill */
+            /* Send / Receive — interior fully TRANSPARENT. Only the
+               outline and the text carry the gradient (green -> light
+               green). Send runs top->bottom, Receive is the same two
+               stops reversed.
+               The ring is a masked pseudo-element rather than a border:
+               a gradient border via background-clip needs an opaque
+               padding-box layer to mask itself, which would fill the
+               interior. mask-composite carves the centre out instead,
+               leaving real transparency. */
             .top-action-btn {
+                --grad-a: #26b577;   /* dark stop  — emerald  */
+                --grad-b: #8fd84f;   /* light stop — lime     */
+                position: relative;
                 display: inline-flex;
                 align-items: center;
-                gap: 6px;
-                padding: 9px 20px;
+                /* Sized against the Figma: compact pill, arrow ~= the
+                   text's cap height, small gap, thin outline. */
+                gap: 9px;
+                padding: 14px 30px;
                 background: transparent;
-                border: 2px solid rgba(168, 206, 56, 0.8);
-                border-radius: 10px;
-                color: rgba(168, 206, 56, 1);
+                border: none;
+                border-radius: 18px;
                 font-family: inherit;
-                font-size: 14px;
+                font-size: 20px;
                 font-weight: 700;
                 cursor: pointer;
-                transition: background 0.2s ease, border-color 0.2s ease;
+                /* iOS "bumpy": sits ON the surface — a soft drop shadow
+                   below, a green halo around, and it physically presses
+                   down on :active. */
+                box-shadow: 0 3px 10px rgba(0, 0, 0, 0.50),
+                            0 0 20px rgba(80, 200, 120, 0.16);
+                transition: transform 0.14s cubic-bezier(0.34, 1.56, 0.64, 1),
+                            box-shadow 0.16s ease,
+                            filter 0.16s ease;
+            }
+            /* Top sheen inside the ring — the highlight that reads as a
+               raised, slightly domed surface. Kept low-alpha so the
+               interior still shows what's behind it. */
+            .top-action-btn::after {
+                content: '';
+                position: absolute;
+                inset: 2px;
+                border-radius: 16px;
+                background: linear-gradient(180deg,
+                                rgba(255, 255, 255, 0.13) 0%,
+                                rgba(255, 255, 255, 0.04) 42%,
+                                rgba(255, 255, 255, 0) 70%);
+                pointer-events: none;
+            }
+            .top-action-btn::before {
+                content: '';
+                position: absolute;
+                inset: 0;
+                border-radius: inherit;
+                padding: 2px;                       /* = outline thickness */
+                background: var(--grad);
+                -webkit-mask: linear-gradient(#000 0 0) content-box,
+                              linear-gradient(#000 0 0);
+                        mask: linear-gradient(#000 0 0) content-box,
+                              linear-gradient(#000 0 0);
+                -webkit-mask-composite: xor;
+                        mask-composite: exclude;
+                pointer-events: none;
+            }
+            /* Text picks up the same gradient via background-clip. */
+            /* Above the ::after sheen, which is absolutely positioned and
+               would otherwise paint over the content. */
+            .top-action-btn .top-action-icon,
+            .top-action-btn .top-action-label {
+                position: relative;
+                z-index: 1;
+            }
+            .top-action-btn .top-action-label {
+                background: var(--grad);
+                -webkit-background-clip: text;
+                        background-clip: text;
+                -webkit-text-fill-color: transparent;
+                color: transparent;
+            }
+            #topSendBtn {
+                --grad: linear-gradient(180deg, var(--grad-b) 0%, var(--grad-a) 100%);
+            }
+            #topReceiveBtn {
+                --grad: linear-gradient(0deg, var(--grad-b) 0%, var(--grad-a) 100%);
             }
             .top-action-btn:hover {
-                background: rgba(168, 206, 56, 0.1);
-                border-color: rgba(168, 206, 56, 0.95);
+                transform: translateY(-1px);
+                filter: brightness(1.15);
+                box-shadow: 0 5px 14px rgba(0, 0, 0, 0.55),
+                            0 0 26px rgba(80, 200, 120, 0.28);
             }
+            /* Press: sinks into the surface, shadow collapses. */
             .top-action-btn:active {
-                background: rgba(168, 206, 56, 0.18);
+                transform: translateY(1px) scale(0.97);
+                filter: brightness(0.94);
+                box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5),
+                            0 0 10px rgba(80, 200, 120, 0.12);
+            }
+            @media (prefers-reduced-motion: reduce) {
+                .top-action-btn {
+                    transition: none;
+                }
+                .top-action-btn:hover,
+                .top-action-btn:active {
+                    transform: none;
+                }
             }
             .top-action-icon {
-                font-size: 15px;
-                line-height: 1;
-                margin-right: 2px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                width: 30px;
+                height: 30px;
+                margin-right: 0;
+            }
+            .top-action-icon svg {
+                width: 100%;
+                height: 100%;
             }
 
             /* Gear — dark filled circle */
@@ -2216,14 +2900,20 @@
                 transform: translateY(-50%);
                 width: 16px;
                 height: 16px;
-                color: rgba(255, 255, 255, 0.35);
+                /* Brighter than the old 0.35 — on the lighter grey fill a
+                   dim glyph read as disabled. */
+                color: rgba(255, 255, 255, 0.60);
                 pointer-events: none;
             }
             .search-input {
                 width: 100%;
                 height: 44px;
                 padding: 0 14px 0 40px;
-                background: rgba(30, 30, 34, 0.7);
+                /* Palette grey (#2e2e34, same fill as the tab container)
+                   so the field lifts off the #1a1a20 panel. Was
+                   rgba(30,30,34,0.7), which sat darker than the panel and
+                   read as a black slot. */
+                background: #2e2e34;
                 border: 2px solid rgba(255, 255, 255, 0.08);
                 border-radius: 12px;
                 color: #ffffff;
@@ -2235,10 +2925,13 @@
             }
             .search-input:focus {
                 border-color: rgba(168, 206, 56, 0.5);
-                background: rgba(35, 40, 30, 0.7);
+                /* Stay grey on focus — only the border signals focus, so
+                   the fill doesn't shift colour temperature. */
+                background: #33333a;
             }
             .search-input::placeholder {
-                color: rgba(255, 255, 255, 0.35);
+                /* Reads white, not muted-grey. */
+                color: rgba(255, 255, 255, 0.75);
             }
 
             .search-toolbar-actions {
@@ -2250,30 +2943,52 @@
                 display: inline-flex;
                 align-items: center;
                 justify-content: center;
-                gap: 2px;
+                gap: 5px;
                 width: auto;
                 min-width: 44px;
                 height: 44px;
-                padding: 0 10px;
+                padding: 0 8px;
                 background: transparent;
-                border: 2px solid rgba(255, 255, 255, 0.12);
+                /* No button-level border. The only box in the design is
+                   the funnel icon's own rounded square, with the caret
+                   OUTSIDE it — a border here enclosed both. */
+                border: none;
                 border-radius: 12px;
                 color: rgba(255, 255, 255, 0.85);
                 cursor: pointer;
-                transition: background 0.15s ease, border-color 0.15s ease;
+                transition: color 0.15s ease, opacity 0.15s ease;
+            }
+            .toolbar-icon-btn .toolbar-glyph {
+                width: 30px;
+                height: 30px;
+                flex-shrink: 0;
+            }
+            /* Outlined glyph (funnel): stroked, never filled. */
+            .toolbar-icon-btn .toolbar-glyph-outline {
+                fill: none;
+                stroke: currentColor;
+            }
+            /* Solid glyph (dots): filled, never stroked. Stated in CSS
+               rather than relying on the SVG's fill attribute, which any
+               later rule would quietly outrank. */
+            .toolbar-icon-btn .toolbar-glyph-solid {
+                fill: currentColor;
+                stroke: none;
             }
             .toolbar-icon-btn:hover {
-                background: rgba(255, 255, 255, 0.04);
-                border-color: rgba(255, 255, 255, 0.14);
                 color: #ffffff;
             }
             .toolbar-icon-btn svg {
                 width: 16px;
                 height: 16px;
             }
-            .toolbar-caret {
-                font-size: 10px;
-                opacity: 0.7;
+            /* Solid triangle drawn as SVG — the old text glyph rendered
+               at whatever weight the UI font happened to give it. */
+            .toolbar-icon-btn .toolbar-caret {
+                width: 13px;
+                height: 8px;
+                flex-shrink: 0;
+                opacity: 0.85;
             }
         }
         /* ============================================================
@@ -2426,16 +3141,100 @@
            Positioned in the middle of the grid's row-gap (24px), so it
            has ~12px of clear space to the card above and ~12px to the
            card below — no line touching the rounded card edges. */
-        body #listContainer .scroll-list-slot:nth-child(n+3) .drive-item::before {
+        /* Row separator. Keyed off data-vis-index (set by
+           reindexVisibleSlots) rather than :nth-child, because :nth-child
+           counts slots the active tab has filtered out — which drew a
+           separator above the first visible card whenever the list was
+           filtered. Index 0 and 1 are the first row, so they get none. */
+        body #listContainer .scroll-list-slot[data-vis-index]:not([data-vis-index="0"]):not([data-vis-index="1"]) .drive-item::before {
             content: '';
             position: absolute;
             top: -13px;                        /* halfway into the 24px row-gap */
+            /* Same length as before (76% of the card) but SHIFTED toward the
+               centre column rule — see the per-column offsets below. These
+               are the fallback for any single-column case. */
             left: 12%;
             right: 12%;
             height: 1px;
-            background: rgba(255, 255, 255, 0.05);
+            background: rgba(255, 255, 255, 0.10);
             pointer-events: none;
         }
+        /* Shift each row separator toward the centre column rule, keeping
+           its length identical (76%). "Inner" is the RIGHT edge for
+           left-column cards and the LEFT edge for right-column ones, so the
+           two columns need mirrored offsets. Odd slot = left column. */
+        body #listContainer .scroll-list-slot[data-vis-col="left"] .drive-item::before {
+            left: 22%;
+            right: 2%;
+        }
+        body #listContainer .scroll-list-slot[data-vis-col="right"] .drive-item::before {
+            left: 2%;
+            right: 22%;
+        }
+        /* Stopped / errored / paused shares read as switched-off: fully
+           desaturated and dimmed. The library's own rule uses
+           saturate(0.3) on .drive-item-inner, which barely registers and
+           doesn't reach the desktop thumbnail. Grayscale the whole card
+           instead — but keep the action button and kebab in colour so
+           Retry and the menu stay obviously usable. */
+        body #listContainer .drive-item.is-paused .drive-item-thumb,
+        body #listContainer .drive-item.is-paused .drive-item-content {
+            filter: grayscale(1);
+            opacity: 0.55;
+        }
+        body #listContainer .drive-item.is-paused .drive-item-status-line {
+            filter: none;
+            opacity: 1;
+        }
+        body #listContainer .drive-item.is-paused .drive-item-row-action,
+        body #listContainer .drive-item.is-paused .drive-item-menu-container {
+            filter: none;
+            opacity: 1;
+        }
+
+        /* Dash + transfer rate after the status text. The dash is muted so
+           the status colour stays the emphasis; the rate sits between the
+           two in weight. */
+        body #listContainer .drive-item .drive-item-status-dash {
+            color: rgba(255, 255, 255, 0.30);
+            margin: 0 2px;
+        }
+        body #listContainer .drive-item .drive-item-status-speed {
+            color: rgba(255, 255, 255, 0.60);
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Hide the kebab on any row that is mid-transfer. Keyed off the
+           presence of the cancel button rather than a status list, so it
+           tracks exactly the states that render one — downloading,
+           connecting, and a share still under 100%. The X takes its slot;
+           right-click still opens the context menu. */
+        body #listContainer .drive-item:has(.drive-item-row-action-cancel) .drive-item-menu-container {
+            display: none;
+        }
+
+        /* Exit animation. The library slides the slot out to the right
+           (translateX(110%)), which fights the centred, calm feel of the v2
+           list — and in a 2-column grid a card flying sideways across its
+           neighbour reads as a glitch. Sink and fade in place instead,
+           while the height collapses so the rows below close the gap.
+           `body ` prefix: the library injects its styles at runtime, after
+           this sheet. */
+        body #listContainer .scroll-list-slot.is-leaving {
+            transform-origin: center;
+            transition:
+                max-height 260ms cubic-bezier(0.4, 0, 0.2, 1),
+                opacity 200ms ease-out,
+                transform 260ms cubic-bezier(0.4, 0, 0.2, 1),
+                filter 200ms ease-out;
+        }
+        body #listContainer .scroll-list-slot.is-leaving.is-left {
+            max-height: 0;
+            opacity: 0;
+            transform: scale(0.92);
+            filter: blur(2px);
+        }
+
         body #listContainer .drive-item:hover {
             background: rgba(255, 255, 255, 0.04);
         }
@@ -2499,6 +3298,18 @@
             flex-shrink: 0;
             color: #f5c93a;                    /* gold */
         }
+        /* The star sits directly against the END of the filename. The
+           library gives .drive-item-title `flex: 1`, so the title filled
+           the row and shoved the star out to the far right edge. Letting
+           the title size to its content keeps the two together; it still
+           shrinks and ellipsises on long names. Desktop only — mobile
+           doesn't render the star. */
+        body #listContainer .drive-item .drive-item-header {
+            justify-content: flex-start;
+        }
+        body #listContainer .drive-item .drive-item-title {
+            flex: 0 1 auto;
+        }
         body #listContainer .drive-item .drive-item-fav-star[data-fav="true"] {
             display: inline-flex;
             align-items: center;
@@ -2557,14 +3368,22 @@
             min-width: 82px;
             height: 36px;
             padding: 0 18px;
-            border-radius: 999px;
-            background: rgba(50, 70, 30, 0.35);
-            border: 2px solid rgba(168, 206, 56, 0.65);
+            /* Squircle, NOT a pill (Figma). 12px on a 36px button reads
+               clearly rounded without going fully round. */
+            border-radius: 12px;
+            /* Vertical gradient, darker at the bottom — gives the button
+               a lit-from-above solidity the old flat fill lacked. */
+            background: linear-gradient(180deg,
+                            rgba(72, 98, 40, 0.62) 0%,
+                            rgba(36, 48, 22, 0.78) 100%);
+            border: 2px solid rgba(168, 206, 56, 0.55);
             color: #a8ce38;
             font-size: 14px;
         }
         body #listContainer .drive-item .drive-item-row-action-open:hover {
-            background: rgba(168, 206, 56, 0.15);
+            background: linear-gradient(180deg,
+                            rgba(96, 128, 52, 0.72) 0%,
+                            rgba(48, 64, 28, 0.85) 100%);
             border-color: rgba(168, 206, 56, 0.85);
         }
 
@@ -2575,9 +3394,9 @@
             min-width: 82px;
             height: 36px;
             padding: 0 18px;
-            border-radius: 999px;
-            background: #ef4a5f;
-            border: 2px solid #ef4a5f;
+            border-radius: 12px;
+            background: linear-gradient(180deg, #f2596c 0%, #d93b50 100%);
+            border: 2px solid #e04455;
             color: #ffffff;
             font-size: 14px;
         }
@@ -2597,7 +3416,28 @@
             color: rgba(255, 100, 100, 0.95);
             font-size: 20px;
             font-weight: 600;
-            line-height: 1;
+            /* Holds an SVG cross now, so centring is exact — a text glyph
+               could not be centred reliably by flex alone. */
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            line-height: 0;
+            position: relative;      /* anchor for the absolutely-centred svg */
+            box-sizing: border-box;
+        }
+        /* Absolute centring: independent of line boxes, UA button padding
+           and flex alignment, all of which were nudging the mark downward.
+           The circle is 32px with a 2px border, so the padding box is 28px
+           and 50%/50% lands on its exact centre. */
+        body #listContainer .drive-item .drive-item-row-action-cancel svg {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 15px;
+            height: 15px;
+            display: block;
         }
         body #listContainer .drive-item .drive-item-row-action-cancel:hover {
             background: rgba(255, 100, 100, 0.12);
@@ -3125,9 +3965,11 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(0, 0, 0, 0.6);
-            backdrop-filter: blur(4px);
-            -webkit-backdrop-filter: blur(4px);
+            /* Scrim ONLY. A backdrop-filter here blurs the page BEFORE the
+               dialog's own blur sees it, so the dialog has nothing
+               meaningful left to blur and reads as flat grey. Same rule the
+               modal overlay follows. */
+            background: rgba(0, 0, 0, 0.60);
             display: none;
             align-items: center;
             justify-content: center;
@@ -3147,7 +3989,7 @@
             border-radius: 16px;
             padding: 20px;
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
-            max-width: 320px;
+            max-width: 440px;
             width: 90%;
             min-width: 0; /* let max-width win over a long unbreakable filename */
             /* Outer drop shadow removed for consistency with the v2
@@ -3159,6 +4001,59 @@
             font-weight: 600;
             margin-bottom: 8px;
             overflow-wrap: anywhere;
+        }
+
+        /* Opt-in row — e.g. "also delete the file from disk". Hidden unless
+           showConfirm() is given a checkbox. */
+        .confirm-check {
+            display: none;
+            align-items: flex-start;
+            gap: 10px;
+            margin: -6px 0 18px;
+            padding: 12px;
+            border-radius: 12px;
+            background: rgba(0, 0, 0, 0.22);
+            border: 2px solid rgba(255, 255, 255, 0.10);
+            cursor: pointer;
+        }
+        .confirm-check.visible { display: flex; }
+        .confirm-check input {
+            appearance: none;
+            flex-shrink: 0;
+            width: 20px;
+            height: 20px;
+            margin: 0;
+            border-radius: 6px;
+            border: 2px solid rgba(255, 255, 255, 0.35);
+            background: transparent;
+            cursor: pointer;
+            position: relative;
+        }
+        .confirm-check input:checked {
+            background: #ef4a5f;
+            border-color: #ef4a5f;
+        }
+        .confirm-check input:checked::after {
+            content: '';
+            position: absolute;
+            left: 5px;
+            top: 1px;
+            width: 5px;
+            height: 10px;
+            border: solid #fff;
+            border-width: 0 2.5px 2.5px 0;
+            transform: rotate(45deg);
+        }
+        .confirm-check-text {
+            font-size: 13px;
+            line-height: 1.4;
+            color: rgba(255, 255, 255, 0.85);
+        }
+        .confirm-check-sub {
+            display: block;
+            margin-top: 2px;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.45);
         }
 
         .confirm-message {
@@ -3521,6 +4416,14 @@
             line-height: 1.3;
         }
 
+        /* Desktop-v2 share-build surfaces. Their real styling lives in the
+           >=600px block; these base rules keep them hidden on mobile,
+           which would otherwise render them as plain visible blocks. */
+        .share-pill,
+        .send-progress {
+            display: none;
+        }
+
         /* Share Modal */
         .modal-overlay {
             position: fixed;
@@ -3538,10 +4441,34 @@
             justify-content: center;
             z-index: 1000;
             padding: 20px;
+            /* Fade in AND out. `display` is a discrete property, so it
+               needs `allow-discrete` to stay `flex` for the duration of
+               the closing fade instead of snapping to `none` instantly.
+               Chromium 120 (Electron 28) supports this and @starting-style
+               below. No JS involved — the modals still just toggle
+               `.active`. */
+            opacity: 0;
+            transition: opacity 0.11s ease-out,
+                        display 0.11s ease-out allow-discrete;
         }
 
         .modal-overlay.active {
             display: flex;
+            opacity: 1;
+        }
+
+        /* Entry origin — without this the modal is already at opacity 1 on
+           its first rendered frame and the opening fade never runs. */
+        @starting-style {
+            .modal-overlay.active {
+                opacity: 0;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .modal-overlay {
+                transition: none;
+            }
         }
 
         .modal {
@@ -3932,73 +4859,129 @@
             filter: blur(3.5px);
         }
 
+        /* Centred over the card, not tucked at the right edge — this is a
+           destructive action mid-flight and should own the row. */
         .drive-delete-countdown {
             position: absolute;
-            top: 50%;
-            right: 12px;
-            transform: translateY(-50%);
+            inset: 0;
             z-index: 4;
             pointer-events: auto;
             display: flex;
             align-items: center;
-            gap: 8px;
+            justify-content: center;
+            gap: 14px;
             animation: drive-delete-fade-in 0.18s ease-out;
         }
 
-        /* The timer circle is non-interactive — just shows the countdown */
+        /* Countdown ring — same dial language as the share-progress modal,
+           in red. Non-interactive; the pill beside it is the click target. */
         .drive-undo-timer {
             position: relative;
-            width: 34px;
-            height: 34px;
+            width: 40px;
+            height: 40px;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
-            background: rgba(20, 20, 24, 0.6);
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
+            background: rgba(20, 20, 24, 0.72);
+            /* No border — the SVG ring IS the outline, and both together
+               read as a double ring. */
+            box-shadow: 0 0 16px rgba(239, 74, 95, 0.25);
             color: #fff;
+            font-variant-numeric: tabular-nums;
+            font-weight: 700;
+            font-size: 15px;
         }
 
-        /* Sibling "Undo" pill — the actual click target */
+        /* Undo — iOS bumpy: 2px outline, bold, lifts on hover, presses in. */
         .drive-undo-btn {
-            border: none;
-            background: rgba(168, 206, 56, 0.16);
-            color: rgba(168, 206, 56, 0.95);
+            background: transparent;
+            border: 2px solid rgba(168, 206, 56, 0.70);
+            color: #a8ce38;
             border-radius: 14px;
-            padding: 6px 12px;
-            font-size: 11px;
-            font-weight: 600;
-            letter-spacing: 0.3px;
+            padding: 9px 22px;
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 0.2px;
             cursor: pointer;
-            transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
             font-family: inherit;
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45),
+                        0 0 18px rgba(168, 206, 56, 0.14);
+            transition: transform 0.14s cubic-bezier(0.34, 1.56, 0.64, 1),
+                        box-shadow 0.16s ease,
+                        background 0.15s ease;
         }
 
         .drive-undo-btn:hover {
-            background: rgba(168, 206, 56, 0.26);
+            background: rgba(168, 206, 56, 0.14);
+            border-color: rgba(168, 206, 56, 0.95);
             transform: translateY(-1px);
+            box-shadow: 0 5px 14px rgba(0, 0, 0, 0.5),
+                        0 0 24px rgba(168, 206, 56, 0.26);
+        }
+
+        .drive-undo-btn:active {
+            transform: translateY(1px) scale(0.97);
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
         }
 
         .drive-undo-btn:disabled {
             cursor: default;
-            background: rgba(255, 255, 255, 0.06);
-            color: rgba(255, 255, 255, 0.35);
+            background: transparent;
+            border-color: rgba(255, 255, 255, 0.14);
+            color: rgba(255, 255, 255, 0.40);
             transform: none;
+            box-shadow: none;
         }
 
-        /* Final state — timer has run out. Hide the circle and bump the
-           "Deleting…" text so it reads as the primary status. */
+        /* Timer expired — the ring goes and "Deleting…" becomes the whole
+           statement: centred, large, red, unmistakable. */
+        .drive-delete-countdown.is-final {
+            gap: 0;
+        }
+
         .drive-delete-countdown.is-final .drive-undo-timer {
             display: none;
         }
 
         .drive-delete-countdown.is-final .drive-undo-btn {
-            font-size: 13px;
-            font-weight: 600;
-            padding: 8px 16px;
+            font-size: 17px;
+            font-weight: 700;
+            padding: 10px 26px;
             letter-spacing: 0.2px;
+            border-color: rgba(239, 74, 95, 0.55);
+            color: #ef4a5f;
+            background: rgba(239, 74, 95, 0.10);
+            box-shadow: 0 0 22px rgba(239, 74, 95, 0.22);
+            animation: deleting-pulse 1.1s ease-in-out infinite;
         }
+
+        /* "Cancelling…" — same footprint as the countdown's final state, but
+           no ring and no undo: cancelling happens immediately. */
+        .drive-cancel-label {
+            font-size: 17px;
+            font-weight: 700;
+            letter-spacing: 0.2px;
+            color: #ef4a5f;
+            padding: 10px 26px;
+            border: 2px solid rgba(239, 74, 95, 0.55);
+            border-radius: 14px;
+            background: rgba(239, 74, 95, 0.10);
+            box-shadow: 0 0 22px rgba(239, 74, 95, 0.22);
+            animation: deleting-pulse 1.1s ease-in-out infinite;
+        }
+
+        @keyframes deleting-pulse {
+            0%, 100% { opacity: 1; }
+            50%      { opacity: 0.6; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .drive-delete-countdown.is-final .drive-undo-btn {
+                animation: none;
+            }
+        }
+
 
         .drive-undo-ring {
             position: absolute;
@@ -4017,8 +5000,10 @@
 
         .drive-undo-ring-fg {
             fill: none;
-            stroke: rgba(168, 206, 56, 0.95);
-            stroke-width: 2.5;
+            /* Red: this ring is counting down to a deletion, not to
+               something good. The green Undo pill beside it is the escape. */
+            stroke: #ef4a5f;
+            stroke-width: 3;
             stroke-dasharray: 100 100;
             stroke-dashoffset: 0;
             stroke-linecap: round;
@@ -4041,8 +5026,8 @@
         }
 
         @keyframes drive-delete-fade-in {
-            from { opacity: 0; transform: translateY(-50%) scale(0.85); }
-            to { opacity: 1; transform: translateY(-50%) scale(1); }
+            from { opacity: 0; transform: scale(0.9); }
+            to   { opacity: 1; transform: scale(1); }
         }
 
         @media (prefers-reduced-motion: reduce) {
@@ -4257,11 +5242,35 @@
             </nav>
             <div class="top-actions">
                 <button type="button" class="top-action-btn" id="topSendBtn" title="Send files">
-                    <span class="top-action-icon" aria-hidden="true">↑</span>
+                    <!-- Round-capped SVG arrow. Stroke uses its own gradient
+                         (text background-clip can't reach an SVG). -->
+                    <span class="top-action-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="url(#sendArrowGrad)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                            <defs>
+                                <linearGradient id="sendArrowGrad" gradientUnits="userSpaceOnUse" x1="12" y1="4" x2="12" y2="20">
+                                    <stop offset="0%" stop-color="#8fd84f"/>
+                                    <stop offset="100%" stop-color="#26b577"/>
+                                </linearGradient>
+                            </defs>
+                            <path d="M12 19.5V5.5"/>
+                            <path d="M5.5 12L12 5.5 18.5 12"/>
+                        </svg>
+                    </span>
                     <span class="top-action-label">Send</span>
                 </button>
                 <button type="button" class="top-action-btn" id="topReceiveBtn" title="Receive files">
-                    <span class="top-action-icon" aria-hidden="true">↓</span>
+                    <span class="top-action-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="url(#receiveArrowGrad)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                            <defs>
+                                <linearGradient id="receiveArrowGrad" gradientUnits="userSpaceOnUse" x1="12" y1="20" x2="12" y2="4">
+                                    <stop offset="0%" stop-color="#8fd84f"/>
+                                    <stop offset="100%" stop-color="#26b577"/>
+                                </linearGradient>
+                            </defs>
+                            <path d="M12 4.5V18.5"/>
+                            <path d="M5.5 12L12 18.5 18.5 12"/>
+                        </svg>
+                    </span>
                     <span class="top-action-label">Receive</span>
                 </button>
                 <button type="button" class="top-settings-btn" id="topSettingsBtn" title="Settings" aria-label="Settings">
@@ -4284,16 +5293,23 @@
             </div>
             <div class="search-toolbar-actions">
                 <button type="button" class="toolbar-icon-btn" id="filterBtn" title="Filter" aria-label="Filter">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
+                    <!-- Funnel enclosed in its OWN rounded square — in the
+                         Figma the box belongs to the icon, and the caret
+                         sits outside it (the button itself has no border). -->
+                    <svg class="toolbar-glyph toolbar-glyph-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <rect x="3" y="3" width="18" height="18" rx="5.5"></rect>
+                        <path d="M8.1 8.5h7.8l-3 3.6v3.3l-1.8 1.1v-4.4z"></path>
                     </svg>
-                    <span class="toolbar-caret" aria-hidden="true">▾</span>
+                    <svg class="toolbar-caret" viewBox="0 0 10 6" fill="currentColor" aria-hidden="true">
+                        <path d="M0.7 0.7h8.6L5 5.5z"></path>
+                    </svg>
                 </button>
                 <button type="button" class="toolbar-icon-btn" id="listOptionsBtn" title="List options" aria-label="List options">
-                    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                        <circle cx="5" cy="12" r="1.6"></circle>
-                        <circle cx="12" cy="12" r="1.6"></circle>
-                        <circle cx="19" cy="12" r="1.6"></circle>
+                    <!-- 3 dots in a triangle (apex up), not a row. -->
+                    <svg class="toolbar-glyph toolbar-glyph-solid" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <circle cx="12" cy="5.9" r="2.9"></circle>
+                        <circle cx="5.9" cy="17.4" r="2.9"></circle>
+                        <circle cx="18.1" cy="17.4" r="2.9"></circle>
                     </svg>
                 </button>
             </div>
@@ -4419,6 +5435,19 @@
         <!-- ScrollList Container -->
         <div class="list-container" id="listContainer">
             <!-- ScrollList renders here -->
+
+            <!-- Favorites empty state (Figma screen #20). Shown purely by
+                 CSS when the Favorites tab is active and no slot carries
+                 data-fav="true" — see the :has() rule in the stylesheet. -->
+            <div class="favorites-empty" id="favoritesEmpty">
+                <div class="favorites-empty-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round">
+                        <path d="M12 2.5l2.9 6.4 7 .7-5.3 4.8 1.6 6.9L12 17.9l-6.2 3.4 1.6-6.9L2.1 9.6l7-.7z"/>
+                    </svg>
+                </div>
+                <div class="favorites-empty-title">Nothing pinned yet</div>
+                <div class="favorites-empty-text">Star a share from its menu to keep it here.</div>
+            </div>
         </div>
 
         <!-- Bottom bar — action buttons. The link input lives outside
@@ -4496,12 +5525,57 @@
     </div>
 
     <!-- ============================================================
+         Folder Contents Modal (Desktop v2, Figma screen #22) — opened
+         from a folder card's "View files" button. Replaces the old
+         inline expand, which stretched the sibling card in the
+         2-column grid. Shell (760x520, frosted glass) comes from the
+         canonical `.modal-overlay .modal` rule — everything below only
+         tweaks INTERNAL layout, never the shell.
+         ============================================================ -->
+    <div class="modal-overlay folder-modal-overlay" id="folderModalOverlay">
+        <div class="modal folder-modal">
+            <div class="folder-modal-header">
+                <div class="folder-modal-heading">
+                    <span class="folder-modal-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                        </svg>
+                    </span>
+                    <div class="folder-modal-heading-text">
+                        <h2 class="folder-modal-title" id="folderModalTitle">Folder</h2>
+                        <div class="folder-modal-sub" id="folderModalSub">&mdash;</div>
+                    </div>
+                </div>
+                <button type="button" class="folder-modal-close" id="folderModalCloseBtn" aria-label="Close">&times;</button>
+            </div>
+
+            <!-- Two-column card grid, same visual language as the main
+                 list. Rows injected by renderer.js. -->
+            <div class="folder-modal-grid" id="folderModalGrid"></div>
+
+            <div class="modal-actions folder-modal-actions">
+                <button type="button" class="modal-btn secondary" id="folderModalDoneBtn">Done</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================
          Send Modal (Desktop v2 redesign) — clicked from the top-right
          "↑ Send" button. Contains an Add Files hero card that opens the
          native file picker, and (future) a Recent Shares list. On file
          selection it calls startShare, which will pop the existing
          shareModal with the peardrop:// link + QR.
          ============================================================ -->
+    <!-- Background share progress pill (bottom-right). Shown when the
+         user closes the Send modal while a share is still building, or
+         when the share was started from the drop-zone rather than the
+         modal. Click returns to the modal. -->
+    <div class="share-pill" id="sharePill" role="status" aria-live="polite">
+        <span class="share-pill-dot" aria-hidden="true"></span>
+        <span class="share-pill-text">Preparing files</span>
+        <span class="share-pill-percent" id="sharePillPercent">0%</span>
+    </div>
+
     <div class="modal-overlay send-modal-overlay" id="sendModalOverlay">
         <div class="modal send-modal">
             <div class="send-modal-header">
@@ -4529,6 +5603,45 @@
                 </div>
                 <div class="send-file-review-list" id="sendFileReviewList"></div>
                 <button type="button" class="send-share-btn" id="sendShareBtn">Share</button>
+            </div>
+
+            <!-- State C: building the share. Replaces A and B while
+                 createDrive() writes the selected files. Driven by the
+                 'share-progress' IPC event. -->
+            <div class="send-progress" id="sendProgress">
+                <!-- Circular determinate ring. r=52 -> circumference 326.7;
+                     renderer sets stroke-dashoffset to fill it. -->
+                <div class="send-progress-dial">
+                    <svg class="send-progress-dial-svg" viewBox="0 0 120 120" aria-hidden="true">
+                        <circle class="send-progress-track" cx="60" cy="60" r="52"></circle>
+                        <circle class="send-progress-fill" id="sendProgressRing" cx="60" cy="60" r="52"></circle>
+                    </svg>
+                    <div class="send-progress-dial-value">
+                        <span class="send-progress-num" id="sendProgressPercent">0</span><span class="send-progress-pct">%</span>
+                    </div>
+                </div>
+
+                <div class="send-progress-title">Preparing your files</div>
+                <div class="send-progress-file" id="sendProgressFile">&mdash;</div>
+
+                <!-- Static bold labels; only the numbers change. -->
+                <div class="send-progress-stats">
+                    <div class="send-progress-stat">
+                        <div class="send-progress-stat-label" id="sendProgressFilesLabel">Files</div>
+                        <div class="send-progress-stat-value send-progress-num" id="sendProgressFiles">0</div>
+                    </div>
+                    <div class="send-progress-stat-div" aria-hidden="true"></div>
+                    <div class="send-progress-stat">
+                        <div class="send-progress-stat-label">Size</div>
+                        <div class="send-progress-stat-value send-progress-num" id="sendProgressBytes">0 B</div>
+                    </div>
+                </div>
+
+                <div class="send-progress-actions">
+                    <button type="button" class="send-progress-bg-btn" id="sendProgressBgBtn">Continue in Background</button>
+                    <button type="button" class="send-progress-cancel-btn" id="sendProgressCancelBtn">Cancel</button>
+                </div>
+                <div class="progress-bar" id="sendProgressBar" hidden></div>
             </div>
 
             <!-- Recent Shares — 2-column grid of previously-shared items,
@@ -4560,6 +5673,10 @@
                 <input type="text" class="receive-paste-input" id="receivePasteInput" placeholder="Paste link here" autocomplete="off" spellcheck="false">
                 <button type="button" class="receive-paste-btn" id="receivePasteBtn">Paste</button>
             </div>
+            <!-- Live validation for the pasted link. Empty input shows
+                 nothing at all; the row only appears once there's something
+                 to judge. -->
+            <div class="receive-link-hint" id="receiveLinkHint" aria-live="polite"></div>
             <div class="receive-or-divider">
                 <span class="receive-or-line"></span>
                 <span class="receive-or-text">Or</span>
@@ -4795,6 +5912,10 @@
         <div class="confirm-dialog">
             <div class="confirm-title" id="confirmTitle">Confirm</div>
             <div class="confirm-message" id="confirmMessage">Are you sure?</div>
+            <label class="confirm-check" id="confirmCheck">
+                <input type="checkbox" id="confirmCheckInput">
+                <span class="confirm-check-text" id="confirmCheckLabel"></span>
+            </label>
             <div class="confirm-buttons" id="confirmButtons">
                 <!-- Buttons inserted dynamically -->
             </div>
