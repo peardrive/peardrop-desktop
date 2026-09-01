@@ -426,7 +426,9 @@ function setupIPC() {
     const cancelledDownloads = new Set();
     // Downloads whose loop is still running. Lets the cancel handler tell
     // "stop it" apart from "it already finished, so delete what it made".
-    const activeDownloads = new Set();
+    // driveId -> timestamp the loop started. A Map rather than a Set so a
+    // hung run can be recognised as stale instead of blocking forever.
+    const activeDownloads = new Map();
     // driveId -> { root, isOwnFolder }. Recorded before the first byte is
     // written, so cleanup works no matter how the download ends.
     const downloadRoots = new Map();
@@ -536,8 +538,40 @@ function setupIPC() {
     });
 
     ipcMain.handle('hyperdrive-download', async (event, { driveId, destDir, fileNames }) => {
+        // AUTHORITATIVE GUARD: one download loop per drive.
+        //
+        // Three separate call sites can start a download (fresh paste, the
+        // engine's drive-ready-to-download, and the Resume button), and none
+        // of them coordinate. Two loops on one drive both write the same
+        // files, both emit progress into the same card — which is the
+        // flickering — and the second overwrites the first's entries in
+        // activeDownloads / downloadRoots / downloadAborters, so cancelling
+        // would then target the wrong run.
+        // The guard must never become permanent. If a loop hangs without
+        // returning, its id stays in activeDownloads and EVERY later attempt
+        // is refused — a transient stall turns into a download that can never
+        // be started again, with only a console line to show for it.
+        // A run older than this is treated as dead and superseded.
+        const STALE_DOWNLOAD_MS = 5 * 60 * 1000;
+        const startedAt = activeDownloads.get(driveId);
+
+        if (startedAt && (Date.now() - startedAt) < STALE_DOWNLOAD_MS) {
+            console.warn('[PearDrop] Download already running for this drive, ignoring duplicate start',
+                { driveId, runningForMs: Date.now() - startedAt });
+            return { success: false, alreadyRunning: true, error: 'Download already in progress' };
+        }
+        if (startedAt) {
+            console.warn('[PearDrop] Previous download for this drive looks dead, superseding it',
+                { driveId, ageMs: Date.now() - startedAt });
+            // Abort whatever is left of it so two loops can't overlap.
+            const staleAbort = downloadAborters.get(driveId);
+            if (staleAbort) { try { staleAbort(); } catch (_) {} }
+            downloadAborters.delete(driveId);
+        }
+
+        console.log('[PearDrop] Download starting', { driveId });
         cancelledDownloads.delete(driveId);   // fresh attempt
-        activeDownloads.add(driveId);
+        activeDownloads.set(driveId, Date.now());
         try {
             const session = hyperdriveManager.activeDrives.get(driveId);
             if (!session) {
@@ -559,8 +593,44 @@ function setupIPC() {
             // downloader.js's byte-percent tracks the selection instead of the
             // whole-drive total. Passing `session.totalBytes` unchanged today
             // is correct because `fileNames` is absent.
+            // If this drive was downloaded before, hand the downloader the
+            // paths it used so a resume continues into the same files rather
+            // than creating `name-1`, `name-2`, ... beside the partials.
+            const priorEntry = hyperdriveManager.manifest?.drives?.[driveId];
+            const resumePaths = {};
+            for (const f of (priorEntry?.files || [])) {
+                if (!f || !f.path) continue;
+                if (f.key) {
+                    // Written by a previous download — the exact in-drive key.
+                    resumePaths[f.key] = f.path;
+                } else {
+                    // Older entries predate `key` being recorded. Fall back to
+                    // the basename, which is right whenever the file was not
+                    // renamed by getUniqueFilePath. A wrong guess is harmless:
+                    // the downloader's root check rejects anything unsafe, and
+                    // a non-matching key simply falls through to normal naming.
+                    const base = f.name || String(f.path).split(/[\/]/).pop();
+                    if (base) resumePaths['/' + base] = f.path;
+                }
+            }
+
+            // The folder a previous attempt used. localPath on the entry is
+            // the downloads ROOT, not the per-share subfolder, so derive the
+            // real one from a stored file path. Without this the resume
+            // creates "<name> (1)" next to the original.
+            let resumeRoot = null;
+            const firstPriorPath = (priorEntry?.files || []).find(f => f && f.path)?.path;
+            if (firstPriorPath) {
+                const dir = path.dirname(firstPriorPath);
+                // Only when it really is a per-share subfolder, not the
+                // downloads root itself (single-file shares live there).
+                if (path.resolve(dir) !== path.resolve(downloadPath)) resumeRoot = dir;
+            }
+
             const result = await downloadFromDrive(session.drive, {
                 destDir: downloadPath,
+                resumePaths: Object.keys(resumePaths).length ? resumePaths : null,
+                resumeRoot,
                 totalBytes: session.totalBytes || 0,
                 shareName: session.shareName,
                 fileNames,
@@ -605,6 +675,29 @@ function setupIPC() {
                 registerAborter: (fn) => downloadAborters.set(driveId, fn)
             });
             
+            // A stalled or dropped sender does NOT throw: downloadFromDrive
+            // catches per-file errors, pushes them to result.failed and
+            // returns normally. Nothing here used to inspect that, so a
+            // download where every file failed still added a drive entry,
+            // toasted "Download complete" and claimed to be seeding a file
+            // it never received. Report what actually happened.
+            const failedCount = (result.failed || []).length;
+            const gotCount = (result.files || []).length;
+
+            if (gotCount === 0 && failedCount > 0) {
+                console.warn('[PearDrop] Download failed: no files retrieved', {
+                    driveId, failed: failedCount
+                });
+                activeDownloads.delete(driveId);
+                downloadAborters.delete(driveId);
+                downloadRoots.delete(driveId);
+                return {
+                    success: false,
+                    error: 'The sender went offline before any files transferred',
+                    failed: result.failed
+                };
+            }
+
             // Cancelled while the loop was still running? The isCancelled
             // check only fires BETWEEN files, so a cancel arriving during the
             // last (or only) file lets the loop finish normally — and the
@@ -649,7 +742,9 @@ function setupIPC() {
                     files: result.files,
                     downloadPath,
                     driveId: driveEntry.id,
-                    isSeeding: true
+                    isSeeding: true,
+                    partial: failedCount > 0,
+                    failedCount
                 });
                 
                 // Notify about new drive entry
@@ -662,7 +757,17 @@ function setupIPC() {
             activeDownloads.delete(driveId);
             downloadAborters.delete(driveId);
             downloadRoots.delete(driveId);
-            return { success: true, files: result.files, downloadPath, driveId: driveEntry.id };
+            // Partial: some files arrived, some didn't. Still a success —
+            // what we got is real and worth seeding — but say so rather than
+            // reporting a clean run.
+            return {
+                success: true,
+                partial: failedCount > 0,
+                failed: result.failed,
+                files: result.files,
+                downloadPath,
+                driveId: driveEntry.id
+            };
         } catch (error) {
             activeDownloads.delete(driveId);
             downloadAborters.delete(driveId);
@@ -852,13 +957,35 @@ function setupIPC() {
 
             // Delete anything removeDriveEntry could not, because the entry
             // was already gone by the time it looked.
+            const touchedDirs = new Set();
             for (const file of filesToDelete) {
                 if (!file || !file.path) continue;
                 try {
                     await fs.rm(file.path, { force: true });
+                    touchedDirs.add(path.dirname(file.path));
                     console.log('[PearDrop] Deleted downloaded file', file.path);
                 } catch (err) {
                     console.warn('[PearDrop] Could not delete file', file.path, err.message);
+                }
+            }
+
+            // A multi-file share downloads into its own folder. Removing the
+            // files left that folder sitting there empty, so the share looked
+            // half-deleted in the file explorer. Remove it too — but ONLY if
+            // it is genuinely empty (never recursively, and never the
+            // downloads root itself, which holds unrelated files).
+            for (const dir of touchedDirs) {
+                try {
+                    if (path.resolve(dir) === path.resolve(DOWNLOADS_DIR)) continue;
+                    const left = await fs.readdir(dir);
+                    if (left.length === 0) {
+                        await fs.rmdir(dir);
+                        console.log('[PearDrop] Removed now-empty share folder', dir);
+                    } else {
+                        console.log('[PearDrop] Leaving folder, still has files', { dir, left: left.length });
+                    }
+                } catch (err) {
+                    console.warn('[PearDrop] Could not tidy folder', dir, err.message);
                 }
             }
             

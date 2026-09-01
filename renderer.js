@@ -280,11 +280,6 @@ function init() {
                     showShareModal(link);
                     return;
                 }
-                if (event.action === 'edit') {
-                    // TODO: rename modal — placeholder for now.
-                    showToast('Rename coming soon');
-                    return;
-                }
                 if (event.action === 'properties') {
                     const storedDrive = drives.find(d => d.id === event.data.id);
                     // openInfoModal lives inside the desktop top-bar IIFE that
@@ -853,10 +848,29 @@ async function startDownload() {
         return;
     }
     
-    if (dupCheck.isDuplicate) {
+    // ⚠️ TEMPORARY TEST SWITCH — set back to false before shipping.
+    //
+    // The duplicate check normally blocks re-downloading a link already in
+    // the list, including your own share. Lifted so the download/cancel/
+    // resume paths can be exercised against a locally-shared file without
+    // needing a second machine.
+    //
+    // The proper behaviour, still to build, is a glass confirm offering
+    // "Show in list" / "Download again" — see decideDupCheckAction() in
+    // lib/dup-check-action.js, which already models that decision and is
+    // currently unused.
+    const ALLOW_DUPLICATE_DOWNLOADS = true;
+
+    if (dupCheck.isDuplicate && !ALLOW_DUPLICATE_DOWNLOADS) {
         highlightExistingDrive(dupCheck.driveId);
         showAlreadyDownloadedMessage('Already downloaded');
         return;
+    }
+    if (dupCheck.isDuplicate) {
+        // Still say something — silently re-downloading a file already in
+        // the list would look like a bug rather than a deliberate override.
+        console.warn('[PearDrop] Duplicate download allowed by test switch', dupCheck.driveId);
+        showToast('Already in your list — downloading again (test mode)');
     }
     
     // 2. Not a duplicate - add to list immediately (animate — fresh download)
@@ -977,9 +991,24 @@ function showAlreadyDownloadedMessage(message) {
 }
 
 // Background download handler
+// Drives with a download request already in flight from THIS renderer.
+// main holds the authoritative guard; this one stops the redundant IPC and,
+// more importantly, the status writes that came with it — those were what
+// made the card flicker as two callers fought over it.
+const downloadsInFlight = new Set();
+
 async function handleDownload(driveId, link) {
+    if (downloadsInFlight.has(driveId)) {
+        console.warn('[PearDrop] Download already starting for', driveId, '- ignoring duplicate');
+        return;
+    }
+    downloadsInFlight.add(driveId);
     try {
         const downloadResult = await window.electronAPI.hyperdriveDownload({ driveId });
+
+        // A duplicate that slipped past the local guard: leave the card
+        // alone entirely — the run that is actually going owns it.
+        if (downloadResult && downloadResult.alreadyRunning) return;
         
         if (downloadResult.success) {
             // Provisional. The authoritative state arrives with the
@@ -987,10 +1016,17 @@ async function handleDownload(driveId, link) {
             updateDriveInList({ id: driveId, status: 'complete', progress: 1 });
         } else {
             updateDriveInList({ id: driveId, status: 'error' });
+            // Surface WHY. A silent red row left people guessing whether the
+            // sender vanished or something was wrong with the link.
+            if (downloadResult.error && !downloadResult.cancelled) {
+                showToast(downloadResult.error, 'error');
+            }
         }
     } catch (err) {
         console.error('Download error:', err);
         updateDriveInList({ id: driveId, status: 'error' });
+    } finally {
+        downloadsInFlight.delete(driveId);
     }
 }
 
@@ -1095,30 +1131,69 @@ function semverLt(a, b) {
     return false;
 }
 
+// QR codes are a pure function of the link: the same link always encodes to
+// the same image, and a drive's link never changes. So this can be cached
+// with no staleness risk. Kept in memory only — generation itself measures
+// ~3ms, so persisting it to disk would trade real storage for nothing. The
+// delay users actually see is the IPC round-trip waiting on a busy main
+// process, which a cache only helps on the SECOND open.
+const qrCache = new Map();
+
 async function showShareModal(link) {
     shareLinkDisplay.textContent = link;
     shareModal.classList.add('active');
 
-    // Generate QR code
     const qrCanvas = document.getElementById('shareQrCode');
-    try {
-        const dataUrl = await window.electronAPI.generateQr(link);
+    const qrSlot   = document.getElementById('shareQrSlot');
+
+    const paint = (dataUrl) => {
         const img = new Image();
         img.onload = () => {
             const ctx = qrCanvas.getContext('2d');
             ctx.clearRect(0, 0, qrCanvas.width, qrCanvas.height);
             ctx.drawImage(img, 0, 0, qrCanvas.width, qrCanvas.height);
-            qrCanvas.style.display = 'block';
+            qrSlot?.classList.add('is-ready');
         };
         img.src = dataUrl;
+    };
+
+    // Cache hit — paint immediately, never show the spinner.
+    const cached = qrCache.get(link);
+    if (cached) {
+        paint(cached);
+        return;
+    }
+
+    // Miss — the slot keeps its size either way, so the modal never changes
+    // height. But generation is ~3ms on an idle app, and a spinner that
+    // appears and vanishes within a couple of frames reads as a glitch. Hold
+    // it back for 180ms: fast paths show nothing at all, and it only appears
+    // when there is a real wait (main process busy resuming drives, etc).
+    qrSlot?.classList.remove('is-ready');
+    qrSlot?.classList.add('is-pending');
+    const spinnerTimer = setTimeout(() => qrSlot?.classList.remove('is-pending'), 180);
+    try {
+        const dataUrl = await window.electronAPI.generateQr(link);
+        clearTimeout(spinnerTimer);
+        qrSlot?.classList.remove('is-pending');
+        qrCache.set(link, dataUrl);
+        // The user may have closed and reopened on a different link while
+        // this was in flight; only paint if it's still the one on screen.
+        if (shareLinkDisplay.textContent === link) paint(dataUrl);
     } catch (err) {
-        qrCanvas.style.display = 'none';
+        clearTimeout(spinnerTimer);
+        qrSlot?.classList.remove('is-pending');
+        console.warn('[qr] generation failed:', err.message);
+        // Leave the placeholder up rather than collapsing the layout.
     }
 }
 
 function closeShareModal() {
     shareModal.classList.remove('active');
-    document.getElementById('shareQrCode').style.display = 'none';
+    // Reset to the loading state for the next open. Was setting the canvas
+    // to display:none, which is what removed its footprint and made the
+    // modal jump on every open.
+    document.getElementById('shareQrSlot')?.classList.remove('is-ready');
 
     // The new share was added silently behind this modal so updates could
     // route to it during the modal's lifetime. Animate it in now that the
@@ -1177,6 +1252,7 @@ function addDriveToList(drive, options = {}) {
         // attribute, so switching tabs never re-renders the list.
         result.slot.dataset.fav = isFavorite(drive.id) ? 'true' : 'false';
         reindexVisibleSlots();
+        reconcileDroppedOverlays();
     }
 
     // If we have a non-recent sort active, re-apply sorting
@@ -1416,6 +1492,10 @@ function normalizeDrive(drive) {
         // actually separates them (was defaulting everything to 'share').
         type: drive.type || (drive.isUpload === false ? 'download' : 'share'),
         shareLink: drive.shareLink,
+        // The manifest stores this as createdAt; without mapping it the
+        // File Info "Added" row had no source and always showed a dash.
+        addedAt: drive.addedAt || drive.createdAt || null,
+        localPath: drive.localPath || null,
         favorite: isFavorite(drive.id || drive.driveId)
     };
 }
@@ -1479,6 +1559,7 @@ function bindIPC() {
     // Peer connections
     window.electronAPI.onPeerConnected?.((event, data) => {
         const driveId = data.driveId;
+        recordPeerConnection(driveId, data, true);
         const item = driveItems.get(driveId);
         if (item) {
             const drive = drives.find(d => d.id === driveId);
@@ -1491,6 +1572,7 @@ function bindIPC() {
     
     window.electronAPI.onPeerDisconnected?.((event, data) => {
         const driveId = data.driveId;
+        recordPeerConnection(driveId, data, false);
         const item = driveItems.get(driveId);
         if (item) {
             const drive = drives.find(d => d.id === driveId);
@@ -1559,7 +1641,13 @@ function bindIPC() {
                 progress: 1,
                 fileCount: files?.length || 1
             });
-            showToast(isSeeding ? 'Download complete — now sharing' : 'Download complete!', 'success');
+            if (data.partial) {
+                // Some files never arrived. Saying "complete" here would be
+                // a plain lie about what is on disk.
+                showToast(`Finished with ${data.failedCount} file${data.failedCount !== 1 ? 's' : ''} missing`, 'error');
+            } else {
+                showToast(isSeeding ? 'Download complete — now sharing' : 'Download complete!', 'success');
+            }
         }
     });
     
@@ -1652,15 +1740,64 @@ function bindIPC() {
     // Resumed drive ready to continue download (new in unified engine 0.24.0)
     // — an interrupted download reconnected to the sender and can now finish.
     // Kick the same handleDownload path used for fresh downloads.
+    // Sender went offline mid-download. This event has existed and been
+    // forwarded by main all along, but nothing subscribed to it — so the
+    // card sat frozen at its last percentage with no explanation while the
+    // 60s-per-file stall watchdog ran down.
+    window.electronAPI.onDownloadPeerDisconnected?.((event, data) => {
+        const driveId = data && data.driveId;
+        if (!driveId || cancellingDrives.has(driveId)) return;
+        const drive = drives.find(d => d.id === driveId);
+        if (!drive || drive.status !== 'downloading') return;
+
+        updateDriveInList({ id: driveId, status: 'connecting', speed: 0 });
+        showDroppedOverlay(driveId, drive);
+    });
+
     window.electronAPI.onDriveReadyToDownload?.((event, data) => {
         if (!data || !data.driveId) return;
         const { driveId, shareLink, shareName } = data;
         console.log('[PearDrop] drive-ready-to-download:', driveId);
-        updateDriveInList({
+
+        // Two ways to arrive here, and they deserve different treatment:
+        //
+        //  (a) The peer returned during THIS session, while the user was
+        //      looking at a "Connection lost" prompt. They already made no
+        //      choice, and the transfer was theirs a moment ago — continue,
+        //      and take the now-moot prompt away.
+        //
+        //  (b) The app just started and the engine resumed a drive left in
+        //      'seeking' from a previous run. Silently pulling gigabytes the
+        //      moment someone opens the app is not the app's call to make —
+        //      especially when a drop mid-session politely asks first. Park
+        //      it and ask, so both routes behave the same way.
+        const hadPrompt = !!(scrollList?._slots?.get(driveId)?.slot
+            ?.querySelector('.drive-dropped-overlay'));
+        const isStartupResume = (Date.now() - APP_START_AT) < STARTUP_RESUME_WINDOW_MS;
+
+        // Only write the title when the engine actually supplied one.
+        // `shareName || 'Download'` overwrote a card that already showed the
+        // real filename with the placeholder "Download", and the next update
+        // put the name back — a visible flip on every resume. A title change
+        // is structural, so it also forces a full re-render rather than an
+        // in-place patch, making it the most expensive kind of no-op.
+        const update = {
             id: driveId,
-            status: 'downloading',
-            title: shareName || 'Download'
-        });
+            status: hadPrompt || !isStartupResume ? 'downloading' : 'connecting'
+        };
+        if (shareName) update.title = shareName;
+        updateDriveInList(update);
+
+        if (isStartupResume && !hadPrompt) {
+            const drive = drives.find(d => d.id === driveId) || { id: driveId, shareLink };
+            showDroppedOverlay(driveId, drive, {
+                title: 'Unfinished download',
+                sub: 'Continue where it left off?'
+            });
+            return;
+        }
+
+        clearDroppedOverlay(driveId);
         if (typeof handleDownload === 'function') {
             handleDownload(driveId, shareLink);
         }
@@ -2711,6 +2848,142 @@ function bindScrollListEvents() {
     });
 }
 
+/**
+ * "Connection lost" overlay for an interrupted download.
+ *
+ * Resuming is the user's call, not the app's: continuing costs bandwidth and
+ * they may no longer want the file. So the transfer parks here until they
+ * choose. Same glass treatment as the delete/cancel overlays.
+ */
+function showDroppedOverlay(driveId, drive, copy) {
+    const slotData = scrollList && scrollList._slots && scrollList._slots.get(driveId);
+    if (!slotData || !slotData.slot) return;
+    const slot = slotData.slot;
+    if (slot.querySelector('.drive-dropped-overlay')) return;   // already shown
+
+    // Read progress from the drive-item itself, not the `drives` array.
+    // Progress updates call item.update() directly and never go through
+    // updateDriveInList(), so the array's copy stays at whatever it was
+    // created with — which is why this always read "Stopped at 0%".
+    const live = driveItems.get(driveId)?.getData?.();
+    const rawPct = (live && live.progress != null) ? live.progress
+                 : (drive && drive.progress != null ? drive.progress : null);
+    const pct = rawPct != null ? Math.round(rawPct * 100) : null;
+    slot.classList.add('is-dropped');
+
+    const overlay = document.createElement('div');
+    overlay.className = 'drive-dropped-overlay';
+    const title = (copy && copy.title) || 'Connection lost';
+    const sub = (copy && copy.sub)
+        // Only mention a figure when there is real progress to report.
+        // "Stopped at 0%" tells the user nothing they can act on.
+        || `${pct ? `Stopped at ${pct}% · ` : ''}the sender went offline`;
+    overlay.innerHTML =
+        `<div class="drive-dropped-text">${window.PearUtils.escapeHtml(title)}</div>` +
+        `<div class="drive-dropped-sub">${window.PearUtils.escapeHtml(sub)}</div>` +
+        '<div class="drive-dropped-actions">' +
+            '<button type="button" class="drive-dropped-btn resume">Resume</button>' +
+            '<button type="button" class="drive-dropped-btn cancel">Cancel</button>' +
+        '</div>';
+    slot.appendChild(overlay);
+
+    overlay.querySelector('.resume').addEventListener('click', () => {
+        const link = drive.shareLink || drives.find(d => d.id === driveId)?.shareLink;
+        if (!link) {
+            showToast('No share link for this download', 'error');
+            return;
+        }
+
+        // Deliberately NOT pre-checking whether the peer is back. There is no
+        // IPC for that, and inventing one would be guesswork: rejoining the
+        // swarm and waiting IS how you find out. What was actually wrong was
+        // the silence — the overlay vanished and the card sat frozen for up
+        // to 60s per file. So say what is happening, and let the existing
+        // failure path (stall watchdog -> error status + toast) speak if the
+        // sender never returns.
+        clearDroppedOverlay(driveId);
+        updateDriveInList({ id: driveId, status: 'connecting', speed: 0 });
+        showToast('Reconnecting to sender…');
+        if (typeof handleDownload === 'function') handleDownload(driveId, link);
+    });
+
+    overlay.querySelector('.cancel').addEventListener('click', async () => {
+        // Order matters: drop this overlay before showing the cancelling one,
+        // or both sit on the slot at once and the row is double-dimmed.
+        clearDroppedOverlay(driveId);
+        if (cancellingDrives.has(driveId)) return;   // already cancelling
+        cancellingDrives.add(driveId);
+        showCancellingOverlay(driveId);
+        try {
+            // main is the single owner of the teardown here — it stops the
+            // loop, deletes partials and removes the entry. Calling remove
+            // from the renderer as well is what raced the writer before.
+            await window.electronAPI.hyperdriveDownloadCancel?.(driveId);
+            showToast('Download cancelled');
+        } catch (err) {
+            cancellingDrives.delete(driveId);
+            clearCancellingOverlay(driveId);
+            showToast('Cancel failed: ' + (err.message || 'unknown'), 'error');
+        }
+    });
+}
+
+function clearDroppedOverlay(driveId) {
+    const slotData = scrollList && scrollList._slots && scrollList._slots.get(driveId);
+    if (!slotData || !slotData.slot) return;
+    slotData.slot.classList.remove('is-dropped');
+    const overlay = slotData.slot.querySelector('.drive-dropped-overlay');
+    if (overlay) overlay.remove();
+}
+
+// Safety net for EDGE 7: `.is-dropped` dims the row to 45%, and it is only
+// meaningful while the overlay is present. If the overlay were ever removed
+// by another route (a re-render, a slot rebuild), the card would stay greyed
+// with nothing on it explaining why. Reconcile the two on every drive update.
+function reconcileDroppedOverlays() {
+    if (!scrollList || !scrollList._slots) return;
+    for (const [, slotData] of scrollList._slots) {
+        const slot = slotData && slotData.slot;
+        if (!slot || !slot.classList.contains('is-dropped')) continue;
+        if (!slot.querySelector('.drive-dropped-overlay')) {
+            slot.classList.remove('is-dropped');
+        }
+    }
+}
+
+// ─── Peer connection ledger ─────────────────────────────────────────────
+// Per-drive record of who we are (or were) connected to, for the File Info
+// panel. Kept in the renderer only: it is presentation state, and the
+// engine already owns the authoritative peer count.
+//   { active: Map<publicKey, connectedAt>, lastKey, lastAt, lastEndedAt }
+const peerLedger = new Map();
+
+function recordPeerConnection(driveId, data, connected) {
+    if (!driveId) return;
+    let rec = peerLedger.get(driveId);
+    if (!rec) {
+        rec = { active: new Map(), lastKey: null, lastAt: null, lastEndedAt: null };
+        peerLedger.set(driveId, rec);
+    }
+    // Fall back to peerId when a peer arrives without a key (rare, but the
+    // engine tolerates it, so this must too).
+    const key = data.publicKey || data.peerId || null;
+    const at = data.at || Date.now();
+    if (connected) {
+        if (key) rec.active.set(key, at);
+        rec.lastKey = key;
+        rec.lastAt = at;
+    } else {
+        if (key) rec.active.delete(key);
+        rec.lastEndedAt = at;
+    }
+}
+
+// Anything the engine resumes within this window of launch is treated as a
+// leftover from a previous run rather than a live reconnection.
+const APP_START_AT = Date.now();
+const STARTUP_RESUME_WINDOW_MS = 20000;
+
 // Drives the user has cancelled. Progress events for these are dropped so
 // the bar and percentage freeze the instant Cancel is pressed, instead of
 // ticking upward while the backend unwinds.
@@ -3379,7 +3652,16 @@ setActivePage('allshares');
             if (typeof window.openQrScanner === 'function') {
                 window.openQrScanner({
                     onResult: (text) => {
-                        if (linkInput) linkInput.value = text;
+                        // A QR can encode anything; only act on a real link.
+                        // Previously any scanned text was pushed straight
+                        // into startDownload, which failed deeper in with a
+                        // vague error.
+                        const match = String(text || '').match(/peardrop:\/\/[a-f0-9]{64}/i);
+                        if (!match) {
+                            showToast('That QR code is not a PearDrop link', 'error');
+                            return;
+                        }
+                        if (linkInput) linkInput.value = match[0];
                         closeReceiveModal();
                         if (typeof startDownload === 'function') startDownload();
                     }
@@ -3388,12 +3670,31 @@ setActivePage('allshares');
         });
     }
 
-    // "Import QRcode Image" → triggers the existing hidden qrFileInput
-    // which the qr-scanner module already listens to for image decoding.
+    // "Import QRcode Image" → decode a QR out of a picture the user already
+    // has, without opening the camera.
+    //
+    // This used to click #qrFileInput directly. That element belongs to the
+    // qr-scanner module and its decode listener is bound in that module's
+    // init(), which only runs when the CAMERA scanner is opened — so on a
+    // cold app the button silently did nothing. Going through pickQrFile()
+    // keeps the input's ownership where it belongs.
     if (receiveImportQrBtn) {
         receiveImportQrBtn.addEventListener('click', () => {
-            const qrFileInput = document.getElementById('qrFileInput');
-            if (qrFileInput) qrFileInput.click();
+            if (typeof window.pickQrFile !== 'function') return;
+            window.pickQrFile({
+                onResult: (text) => {
+                    // Same handling as the camera path, so both routes into
+                    // Receive behave identically.
+                    const match = String(text || '').match(/peardrop:\/\/[a-f0-9]{64}/i);
+                    if (!match) {
+                        showToast('That image has no PearDrop link in it', 'error');
+                        return;
+                    }
+                    if (linkInput) linkInput.value = match[0];
+                    closeReceiveModal();
+                    if (typeof startDownload === 'function') startDownload();
+                }
+            });
         });
     }
 
@@ -3501,13 +3802,26 @@ setActivePage('allshares');
     const fileInfoSubEl    = document.getElementById('fileInfoSub');
     const fileInfoThumbEl  = document.getElementById('fileInfoThumb');
     const fileInfoGridEl   = document.getElementById('fileInfoGrid');
-    const fileInfoLinkEl   = document.getElementById('fileInfoLink');
+    const fileInfoQrBtn    = document.getElementById('fileInfoQrBtn');
+    // Link for the footer buttons. Tracked here rather than read back from
+    // the DOM, since it is no longer rendered anywhere.
+    let currentInfoLink = '';
     const fileInfoCopyBtn  = document.getElementById('fileInfoCopyBtn');
     const fileInfoCloseBtn = document.getElementById('fileInfoCloseBtn');
     const fileInfoDoneBtn  = document.getElementById('fileInfoDoneBtn');
 
     // Human-readable time-ago for the "Added" row. Falls back to a locale
     // date string if the timestamp is > 30 days old.
+    // "Jul 01, 2026" — the absolute date the Figma shows for Added. timeAgo
+    // stays for the Connection rows, where "2m ago" is the useful reading.
+    function formatDate(ts) {
+        if (!ts) return '—';
+        const d = new Date(ts);
+        if (isNaN(d.getTime())) return '—';
+        const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        return `${MONTHS[d.getMonth()]} ${String(d.getDate()).padStart(2, '0')}, ${d.getFullYear()}`;
+    }
+
     function timeAgo(ts) {
         if (!ts) return '—';
         const s = Math.max(1, Math.floor((Date.now() - ts) / 1000));
@@ -3538,48 +3852,140 @@ setActivePage('allshares');
         return type || '—';
     }
 
+    // Same iOS Files.app folder the drive-item cards use.
+    const FOLDER_ICON_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none" style="color:#6ee0d3"><path d="M3.4 4h4.2a1.6 1.6 0 0 1 1.13.47L10 5.5h-7V5.6A1.6 1.6 0 0 1 3.4 4z"/><path d="M2 8.4a1.6 1.6 0 0 1 1.6-1.6h16.8A1.6 1.6 0 0 1 22 8.4v10.2A1.4 1.4 0 0 1 20.6 20H3.4A1.4 1.4 0 0 1 2 18.6z"/></svg>';
+
     function openInfoModal(data) {
         if (!fileInfoOverlay || !data) return;
 
+        const esc = (v) => window.PearUtils.escapeHtml(v == null ? '' : String(v));
+        // Middle-truncate: the head and tail of a key are what people
+        // compare, so keep both rather than cutting the end off.
+        const truncateKey = (k) => !k ? '—'
+            : (k.length <= 20 ? k : `${k.slice(0, 10)}…${k.slice(-8)}`);
+
         const name = data.title || data.name || data.fileName || 'Untitled';
-        const size = typeof formatBytes === 'function'
-            ? formatBytes(data.size || data.totalBytes || 0)
-            : String(data.size || 0);
+        // PearUtils, not a bare global — the `typeof formatBytes` guard was
+        // always false here, so this fell through to printing raw bytes.
+        const size = window.PearUtils.formatBytes(data.size || data.totalBytes || 0);
         const fileCount = data.fileCount
             || (Array.isArray(data.files) ? data.files.length : 0)
             || 1;
 
+        // Hero icon: cached thumbnail if we have one, else the same
+        // category-tinted SVG the list uses, else the folder icon. It was a
+        // fixed generic page glyph regardless of file type.
+        if (fileInfoThumbEl) {
+            const isGroup = (data.fileCount || 0) > 1
+                || (Array.isArray(data.files) && data.files.length > 1);
+            const firstPath = Array.isArray(data.files) && data.files[0] ? data.files[0].path : null;
+            const cached = firstPath ? fileThumbnailCache.get(firstPath) : null;
+
+            fileInfoThumbEl.classList.remove('is-folder', 'is-fileicon');
+            if (!isGroup && cached && cached.kind === 'image' && cached.src) {
+                fileInfoThumbEl.innerHTML = `<img src="${esc(cached.src)}" alt="">`;
+            } else if (isGroup) {
+                fileInfoThumbEl.classList.add('is-folder');
+                fileInfoThumbEl.innerHTML = FOLDER_ICON_SVG;
+            } else {
+                const ic = window.PearUtils.getFileIconSvg
+                    ? window.PearUtils.getFileIconSvg(name)
+                    : null;
+                if (ic) {
+                    fileInfoThumbEl.classList.add('is-fileicon');
+                    fileInfoThumbEl.innerHTML = `<span style="color:${ic.color}">${ic.svg}</span>`;
+                }
+            }
+        }
+
         fileInfoNameEl.textContent = name;
         fileInfoSubEl.textContent  = `${typeLabel(data.type)} · ${size} · ${fileCount} ${fileCount === 1 ? 'file' : 'files'}`;
 
-        // Property grid — Type / Size / Files / Peers / Status / Added.
-        const rows = [
-            ['Type',   typeLabel(data.type)],
-            ['Size',   size],
-            ['Files',  String(fileCount)],
-            ['Peers',  String(data.peers || 0)],
-            ['Status', statusLabel(data.status)],
-            ['Added',  timeAgo(data.addedAt)]
-        ];
-        fileInfoGridEl.innerHTML = rows.map(([label, value]) => `
-            <div class="file-info-grid-row">
-                <div class="file-info-grid-label">${label}</div>
-                <div class="file-info-grid-value" title="${value}">${value}</div>
-            </div>
-        `).join('');
+        // Sections: Details, then Share info, then Connection. Full-width
+        // rules sit BETWEEN sections only, never between rows.
+        const SECTION = '—section—';
 
-        // Share-link box — hide for drives that don't have a shareLink
-        // (partial downloads before manifest lands, orphaned rows, etc.).
-        const link = data.shareLink || '';
-        if (link) {
-            fileInfoModalEl.classList.remove('no-link');
-            fileInfoLinkEl.textContent = link;
-        } else {
-            fileInfoModalEl.classList.add('no-link');
-            fileInfoLinkEl.textContent = '';
+        // Full path, not just the containing folder — the folder alone left
+        // people unable to tell which file it referred to.
+        const location = (Array.isArray(data.files) && data.files[0] && data.files[0].path)
+            || data.localPath
+            || null;
+
+        const rows = [
+            [SECTION, 'Details'],
+            ['Size',     size],
+            ['Type',     typeLabel(data.type)],
+            ['Added',    formatDate(data.addedAt)],
+            ['Location', location || '—', location || '']
+        ];
+
+        // Status has exactly three values:
+        //   Sharing  - a peer is connected and data is moving
+        //   Active   - on the network and available, nobody connected
+        //   Inactive - stopped / paused / errored
+        const led = peerLedger.get(data.id) || { active: new Map(), lastKey: null, lastAt: null, lastEndedAt: null };
+        const activeKeys = [...led.active.keys()];
+        const onNetwork = data.status === 'sharing'
+            || data.status === 'downloading'
+            || data.status === 'connecting'
+            || data.status === 'complete';
+
+        let shareStatus;
+        if (!onNetwork) shareStatus = 'Inactive';
+        else if (activeKeys.length > 0 || (data.peers || 0) > 0) shareStatus = 'Sharing';
+        else shareStatus = 'Active';
+
+        if (data.shareLink) {
+            const pct = data.progress != null ? Math.round(data.progress * 100) : null;
+            rows.push([SECTION, 'Share info']);
+            rows.push(['Status',   shareStatus]);
+            if (pct != null) rows.push(['Progress', pct + '%']);
+            rows.push(['Peers', String(activeKeys.length || data.peers || 0)]);
+
+            // Every connected peer gets a row, not just the first — a share
+            // can serve several at once, and "Peers: 3" followed by a single
+            // key raised the obvious question of whose key it was.
+            // Numbered only when there is more than one, so the common
+            // single-peer case stays clean.
+            if (activeKeys.length) {
+                activeKeys.forEach((k, i) => {
+                    const label = activeKeys.length > 1 ? `Peer ${i + 1}` : 'Peer key';
+                    rows.push([label, truncateKey(k), k]);
+                    rows.push([activeKeys.length > 1 ? ` connected` : 'Connected',
+                               timeAgo(led.active.get(k))]);
+                });
+            } else if (led.lastKey) {
+                rows.push(['Last peer', truncateKey(led.lastKey), led.lastKey]);
+                rows.push(['Last seen', timeAgo(led.lastEndedAt || led.lastAt)]);
+            } else {
+                rows.push(['Peer key', 'None connected']);
+            }
         }
 
-        fileInfoCopyBtn.textContent = 'Copy';
+        let seenSection = false;
+        fileInfoGridEl.innerHTML = rows.map(([label, value, fullValue]) => {
+            if (label === SECTION) {
+                const first = !seenSection;
+                seenSection = true;
+                return `<div class="file-info-section-head${first ? ' is-first' : ''}">${esc(value)}</div>`;
+            }
+            return `
+            <div class="file-info-grid-row${label === 'Location' ? ' is-path' : ''}">
+                <div class="file-info-grid-label">${esc(label)}</div>
+                <div class="file-info-grid-value" title="${esc(fullValue || value)}">${esc(value)}</div>
+            </div>`;
+        }).join('');
+
+        // The link is never displayed now — the footer buttons act on it.
+        // Hide the whole footer when there is nothing to copy or encode
+        // (a partial download before its manifest lands, an orphan row).
+        const link = data.shareLink || '';
+        currentInfoLink = link;
+        fileInfoModalEl.classList.toggle('no-link', !link);
+        const footerEl = document.getElementById('fileInfoFooter');
+        if (footerEl) footerEl.style.display = link ? 'flex' : 'none';
+
+        fileInfoCopyBtn.textContent = 'Copy Link';
         fileInfoOverlay.classList.add('active');
     }
 
@@ -3599,16 +4005,24 @@ setActivePage('allshares');
     fileInfoOverlay?.addEventListener('click', (e) => {
         if (e.target === fileInfoOverlay) closeInfoModal();
     });
+    // Reads the tracked link, not the DOM — the link is no longer rendered.
     fileInfoCopyBtn?.addEventListener('click', async () => {
-        const link = fileInfoLinkEl?.textContent || '';
-        if (!link) return;
+        if (!currentInfoLink) return showToast('No share link yet', 'error');
         try {
-            await navigator.clipboard.writeText(link);
+            await navigator.clipboard.writeText(currentInfoLink);
             fileInfoCopyBtn.textContent = 'Copied!';
-            setTimeout(() => { fileInfoCopyBtn.textContent = 'Copy'; }, 1500);
+            setTimeout(() => { fileInfoCopyBtn.textContent = 'Copy Link'; }, 1500);
         } catch (_) {
             showToast('Failed to copy', 'error');
         }
+    });
+
+    fileInfoQrBtn?.addEventListener('click', () => {
+        if (!currentInfoLink) return showToast('No share link yet', 'error');
+        const link = currentInfoLink;
+        closeInfoModal();
+        // Reuses the existing share modal, which already renders the QR.
+        if (typeof showShareModal === 'function') showShareModal(link);
     });
 
     // Download-complete toast — bottom-right notification when a download
