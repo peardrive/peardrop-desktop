@@ -92,6 +92,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // File thumbnails — used by the expanded drive-item file list.
     // ========================================================================
     getFileThumbnail: (filePath) => ipcRenderer.invoke('get-file-thumbnail', { path: filePath }),
+    // Diagnostics log (already redacted at write time)
+    filesExist: (paths) => ipcRenderer.invoke('files-exist', { paths }),
+    getLogPath: () => ipcRenderer.invoke('log-get-path'),
+    revealLog: () => ipcRenderer.invoke('log-reveal'),
+    readLogTail: (lines) => ipcRenderer.invoke('log-read-tail', { lines }),
 
     // ========================================================================
     // Debug Control
@@ -116,5 +121,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Runtime resume-failure signal (boot-time failures also travel in the
     // drives-updated action:'loaded' payload; this channel exists for post-init
     // failures and future-proofing).
-    onDriveResumeFailed: (callback) => ipcRenderer.on('drive-resume-failed', callback)
+    onDriveResumeFailed: (callback) => ipcRenderer.on('drive-resume-failed', callback),
+    // A share's DHT topic is announced — it is now reachable by anyone with
+    // the link. Until this fires the drive is open locally but findable by
+    // nobody, which is why the UI shows "Initiating" first.
+    onDriveAnnounced: (callback) => ipcRenderer.on('drive-announced', callback),
+    onDriveAnnounceFailed: (callback) => ipcRenderer.on('drive-announce-failed', callback)
 });

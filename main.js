@@ -26,7 +26,8 @@
  * 'show-file-in-folder' - Reveal file in Finder/Explorer
  * 'get-files-stats' - Get file/folder stats with folder expansion
  * 'generate-qr' - Generate QR data URL for a string
- * 'get-app-version' - App version (reset-notice gating)
+ * 'get-app-version' - App version
+ * 'log-get-path' / 'log-reveal' / 'log-read-tail' - diagnostics log (reset-notice gating)
  * 'check-legacy-data-present' - Detect pre-unified state files
  * 'get-file-thumbnail' - Image src or OS-native icon for a file
  * 'get-debug' - Get current debug state
@@ -70,7 +71,9 @@ const { downloadFromDrive } = require('./lib/downloader');
 const { formatBytes, formatSpeed, normalizeUserPath } = require('./lib/file-utils');
 const { EngineError } = require('./lib/engine-errors');
 // Debug logging
-const { createLogger, loadConfig: loadDebugConfig, setDebug, isDebugEnabled } = require('./lib/logger');
+const { createLogger, loadConfig: loadDebugConfig, setDebug, isDebugEnabled,
+        initFileLogging, attachConsoleMirror, getLogPath,
+        flushNow: flushLog } = require('./lib/logger');
 const log = createLogger('PearDrop');
 
 // Platform detection
@@ -79,6 +82,11 @@ const isWin = process.platform === 'win32';
 const isLinux = process.platform === 'linux';
 
 let mainWindow;
+
+// Shares whose DHT topic has been announced, i.e. that a peer holding the
+// link can actually reach. Module scope because the announce listener and the
+// 'loaded' payload that reconciles first paint sit in different blocks.
+const announcedDrives = new Set();
 
 // SINGLE INSTANCE LOCK (added 2026-07-03): two instances fight over the same
 // corestore fd locks ("File descriptor could not be locked"), which used to
@@ -150,17 +158,28 @@ function createWindow() {
     const savedState = loadWindowState();
 
     // Platform-specific window options.
-    // NOTE: max width/height intentionally NOT set — Amir's UI depends on
-    // being able to stretch into desktop-UI (sidebar appears at >= 600px).
-    // minWidth kept small so the mobile-UI still fits comfortably.
+    //
+    // The window can no longer be made small enough to trigger the mobile
+    // layout. That layout still exists in the stylesheet and is what a phone
+    // build would use, but on desktop it is not a state the user should be
+    // able to fall into by dragging a corner — the desktop UI is what is
+    // designed and tested here.
+    //
+    // minWidth 900: the mobile breakpoint is 600px of VIEWPORT width, and the
+    // window's outer width includes the frame, so 900 clears it with room to
+    // spare — and keeps the two-column grid comfortable rather than merely
+    // legal. minHeight 640 leaves room for the 520px-tall modals plus the
+    // header and toolbar.
+    //
+    // Max width/height intentionally still NOT set.
     const windowOptions = {
-        width: savedState?.width || 415,
-        height: savedState?.height || 830,
+        width: savedState?.width || 1200,
+        height: savedState?.height || 820,
         ...(savedState && typeof savedState.x === 'number' && typeof savedState.y === 'number'
             ? { x: savedState.x, y: savedState.y }
             : {}),
-        minWidth: 380,
-        minHeight: 450,
+        minWidth: 900,
+        minHeight: 640,
         resizable: true,
         webPreferences: {
             nodeIntegration: false,
@@ -231,6 +250,13 @@ function createWindow() {
 async function initializeApp() {
     try {
         // Load debug config first
+        // File logging starts BEFORE anything else, so a failure during
+        // startup — the hardest kind to reproduce — is already on disk.
+        initFileLogging({ appVersion: app.getVersion() });
+        // Capture the engine's raw console.log output (and the P2P
+        // libraries') — that is where the useful detail lives.
+        attachConsoleMirror();
+
         const debugEnabled = loadDebugConfig();
         log('Debug logging:', debugEnabled ? 'ENABLED' : 'DISABLED');
         
@@ -292,7 +318,7 @@ function setupIPC() {
 
             // Calculate total bytes from files
             const totalBytes = safeFiles.reduce((sum, f) => sum + (f.size || 0), 0);
-            const shareName = options.name || (safeFiles.length === 1 ? safeFiles[0].name : `${safeFiles.length} files`);
+            const shareName = options.name || (safeFiles.length === 1 ? safeFiles[0].name : 'Folder');
 
             // Add to drives state (single source of truth for UI)
             const driveEntry = await hyperdriveManager.addDriveEntry({
@@ -506,6 +532,20 @@ function setupIPC() {
         cancelledDownloads.add(driveId);
         console.log('[PearDrop] Download cancel requested', { driveId });
 
+        // SAFETY NET: a cancel must always resolve, even if the engine is
+        // stuck somewhere with no abort hook. The listing phase is handled
+        // now, but any future blocking call would strand the card on
+        // "Cancelling…" forever. If the loop has not unwound shortly, tear
+        // it down from here.
+        setTimeout(async () => {
+            if (!activeDownloads.has(driveId)) return;   // unwound normally
+            console.warn('[PearDrop] Download did not stop after cancel — forcing teardown', { driveId });
+            activeDownloads.delete(driveId);
+            downloadAborters.delete(driveId);
+            cancelledDownloads.delete(driveId);
+            await purgeCancelledDownload(driveId, null);
+        }, 4000);
+
         // Kill the in-flight stream right now. Without this the loop only
         // notices on the next chunk — and on a stalled transfer, not until
         // the stall timeout.
@@ -520,16 +560,34 @@ function setupIPC() {
         // produced go away too. Cancelling means "I don't want this", not "I
         // don't want the rest of it".
         if (!activeDownloads.has(driveId)) {
+            // "No loop running" has two very different causes, and this branch
+            // used to treat them the same:
+            //
+            //   (a) the download finished a moment ago  -> a manifest entry
+            //       exists, and deleting its files is what the user asked for
+            //   (b) nothing was ever downloaded under this id -- a cancel
+            //       during the connecting phase, where the renderer's id is a
+            //       placeholder that never became an entry
+            //
+            // In case (b) removeDriveEntry returns false ("Remove entry: not
+            // found") and the handler still logged "files deleted", which is
+            // both untrue and a `deleteFiles: true` call fired at an
+            // unverified id. Only clean up what actually exists.
+            const entry = hyperdriveManager.manifest?.drives?.[driveId];
+            if (!entry) {
+                console.log('[PearDrop] Cancel during connecting phase — no entry to clean up', { driveId });
+                return { success: true };
+            }
             try {
                 // Same restraint as above: no stopDrive() from a cancel.
-                await hyperdriveManager.removeDriveEntry(driveId, {
+                const removed = await hyperdriveManager.removeDriveEntry(driveId, {
                     deleteFiles: true,
                     deleteStorage: false
                 });
-                if (mainWindow && !mainWindow.isDestroyed()) {
+                if (removed && mainWindow && !mainWindow.isDestroyed()) {
                     mainWindow.webContents.send('drives-updated', { action: 'removed', id: driveId });
                 }
-                console.log('[PearDrop] Cancelled an already-finished download; files deleted', { driveId });
+                console.log('[PearDrop] Cancelled an already-finished download', { driveId, removed });
             } catch (err) {
                 console.warn('[PearDrop] Post-completion cancel cleanup failed', err.message);
             }
@@ -580,6 +638,27 @@ function setupIPC() {
                     cause: 'session-not-found',
                     message: 'Session not found',
                 });
+            }
+
+            // PRECONDITION: never run the loop against a drive that has not
+            // synced. openDrive can return with a socket connected but zero
+            // replicated blocks, and the downloader then "completes" in a
+            // couple of seconds having transferred nothing — which used to be
+            // written to the manifest as a finished share (the 0-file
+            // "Untitled Share" ghost). Every share this app creates has a
+            // manifest, so no manifest AND no bytes means not-ready, not empty.
+            const hasManifest = !!session.manifest;
+            const knownBytes = session.totalBytes || 0;
+            if (!hasManifest && knownBytes === 0) {
+                console.warn('[PearDrop] Refusing to download: drive has not synced yet', {
+                    driveId, hasManifest, knownBytes
+                });
+                activeDownloads.delete(driveId);
+                return {
+                    success: false,
+                    notReady: true,
+                    error: 'Still connecting to the sender — no file list received yet'
+                };
             }
 
             const downloadPath = destDir || DOWNLOADS_DIR;
@@ -684,7 +763,13 @@ function setupIPC() {
             const failedCount = (result.failed || []).length;
             const gotCount = (result.files || []).length;
 
-            if (gotCount === 0 && failedCount > 0) {
+            // This used to require `failedCount > 0`, which left the exact hole
+            // that produced the "Untitled Share" ghost: an un-synced drive
+            // yields 0 files AND 0 failures, slipped past the guard, and was
+            // written to the manifest as a completed download that was then
+            // announced as "now seeding". Zero files retrieved is never a
+            // success, however many of them failed.
+            if (gotCount === 0) {
                 console.warn('[PearDrop] Download failed: no files retrieved', {
                     driveId, failed: failedCount
                 });
@@ -693,7 +778,9 @@ function setupIPC() {
                 downloadRoots.delete(driveId);
                 return {
                     success: false,
-                    error: 'The sender went offline before any files transferred',
+                    error: failedCount > 0
+                        ? 'The sender went offline before any files transferred'
+                        : 'No files received — the sender had nothing to send yet',
                     failed: result.failed
                 };
             }
@@ -807,12 +894,37 @@ function setupIPC() {
         }
     });
 
+    // Which of these paths still exist? Used by the folder modal to mark
+    // removed files up front, rather than the user finding out by clicking.
+    ipcMain.handle('files-exist', async (event, { paths }) => {
+        const out = {};
+        for (const p of (paths || [])) {
+            if (!p) continue;
+            try { await fs.access(p); out[p] = true; }
+            catch (_) { out[p] = false; }
+        }
+        return out;
+    });
+
     // Open file in default application
     ipcMain.handle('open-file', async (event, { filePath }) => {
         try {
             if (!filePath) {
                 return { success: false, error: 'No file path provided' };
             }
+
+            // Check the file is there BEFORE handing it to the OS. Windows
+            // answers a missing path with its own "Windows cannot find…"
+            // dialog — a system-level popup the app cannot style, dismiss or
+            // explain. Far better to detect it here and let the UI say the
+            // file was removed.
+            try {
+                await fs.access(filePath);
+            } catch (_) {
+                return { success: false, missing: true, path: filePath,
+                         error: 'File no longer exists on disk' };
+            }
+
             const result = await shell.openPath(filePath);
             // shell.openPath returns empty string on success, error message on failure
             if (result) {
@@ -858,7 +970,13 @@ function setupIPC() {
     ipcMain.handle('drives-list', async () => {
         try {
             const drives = hyperdriveManager.getAllDriveEntries();
-            return { success: true, drives };
+            // Reachability travels with the list, not only with the one-shot
+            // 'loaded' broadcast at startup. A renderer reload (Ctrl+R) wipes
+            // the renderer's announced Set but does NOT restart main or
+            // re-announce anything, so without this every healthy share came
+            // back as "Initiating" and sat there until the watchdog wrongly
+            // called it unreachable. Main is the process that actually knows.
+            return { success: true, drives, announced: [...announcedDrives] };
         } catch (error) {
             return { success: false, error: error.message };
         }
@@ -872,6 +990,10 @@ function setupIPC() {
                 return { success: false, error: 'Missing drive id' };
             }
             console.log('[PearDrop] Pausing drive', { id });
+            // No longer announced: it has left the swarm. Leaving it in the
+            // set would make a later drives-list report a stopped share as
+            // reachable.
+            announcedDrives.delete(id);
 
             // Stop the hyperdrive but keep storage
             const session = hyperdriveManager.activeDrives.get(id);
@@ -916,6 +1038,9 @@ function setupIPC() {
     ipcMain.handle('drives-remove', async (event, { id, deleteFiles = false }) => {
         try {
             console.log('[PearDrop] Removing drive', { id, deleteFiles });
+            // The drive is going away; drop its reachability with it so the
+            // set cannot grow forever or mislabel an id that gets reused.
+            announcedDrives.delete(id);
             
             // Capture the file list BEFORE anything can destroy the entry.
             // stopDrive({ delete: true }) does `delete manifest.drives[id]`,
@@ -1041,6 +1166,34 @@ function setupIPC() {
     // ========================================================================
     ipcMain.handle('get-app-version', async () => {
         return app.getVersion();
+    });
+
+    // ========================================================================
+    // Diagnostics log — so "the app is misbehaving" can come with evidence.
+    // Keys and home paths are already redacted at write time, so what the
+    // user opens is what they can safely send on.
+    // ========================================================================
+    ipcMain.handle('log-get-path', async () => getLogPath());
+
+    ipcMain.handle('log-reveal', async () => {
+        try {
+            flushLog();                      // don't reveal a stale file
+            shell.showItemInFolder(getLogPath());
+            return { success: true };
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
+    });
+
+    ipcMain.handle('log-read-tail', async (event, { lines = 200 } = {}) => {
+        try {
+            flushLog();
+            const text = await fs.readFile(getLogPath(), 'utf8');
+            const all = text.split('\n');
+            return { success: true, text: all.slice(-lines).join('\n'), path: getLogPath() };
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
     });
 
     // ========================================================================
@@ -1292,6 +1445,29 @@ app.whenReady().then(async () => {
                 mainWindow.webContents.send('drive-resume-failed', data);
             }
         });
+
+        // A share is only reachable once its topic is announced on the DHT,
+        // which lags the drive opening by several seconds. The renderer shows
+        // "Initiating" until this lands, then "Active".
+        //
+        // Also recorded in a Set: these fire during init, and an announce that
+        // completes before the renderer has attached its listener would
+        // otherwise be lost, stranding a perfectly good share on "Initiating"
+        // until it timed out. The snapshot rides along with the 'loaded'
+        // payload below so the first paint can reconcile.
+        hyperdriveManager.on('drive-announced', (data) => {
+            if (data && data.driveId) announcedDrives.add(data.driveId);
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('drive-announced', data);
+            }
+        });
+
+        hyperdriveManager.on('drive-announce-failed', (data) => {
+            if (data && data.driveId) announcedDrives.delete(data.driveId);
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('drive-announce-failed', data);
+            }
+        });
         
         // Initialize Hyperdrive manager with clean, accurate manifest (after event listeners are set up)
         await hyperdriveManager.init();
@@ -1310,7 +1486,11 @@ app.whenReady().then(async () => {
             mainWindow.webContents.send('drives-updated', {
                 action: 'loaded',
                 drives: drives,
-                resumeErrors
+                resumeErrors,
+                // Which shares are already reachable at first paint. Without
+                // this, an announce that beat the renderer's listener would
+                // never be seen and the card would sit on "Initiating".
+                announced: [...announcedDrives]
             });
             console.log('[PearDrop] Notified frontend of loaded drives:', drives.length,
                 Object.keys(resumeErrors).length ? `(${Object.keys(resumeErrors).length} resume failure(s))` : '');

@@ -240,16 +240,19 @@
            Page-switch list filter — applies in BOTH layouts (mobile tabs
            and desktop sidebar both filter the drives list).
            ============================================================ */
-        #listContainer.view-share .scroll-list-slot[data-type="download"] {
+        /* `:not([data-demo])` on each filter: demo rows (peardrop.demo())
+           are debug scaffolding and stay visible on every tab, so the helper
+           never looks broken when it is really just being filtered out. */
+        #listContainer.view-share .scroll-list-slot[data-type="download"]:not([data-demo]) {
             display: none;
         }
-        #listContainer.view-receive .scroll-list-slot[data-type="share"] {
+        #listContainer.view-receive .scroll-list-slot[data-type="share"]:not([data-demo]) {
             display: none;
         }
         /* Favorites tab — hide everything that isn't starred. Same CSS-only
            approach as the view-share / view-receive filters above, so
            switching tabs costs no re-render. */
-        #listContainer.view-favorites .scroll-list-slot:not([data-fav="true"]) {
+        #listContainer.view-favorites .scroll-list-slot:not([data-fav="true"]):not([data-demo]) {
             display: none;
         }
 
@@ -281,8 +284,11 @@
            otherwise a stray vertical line runs straight through the empty
            state. Two cases: the Favorites tab with nothing starred, and any
            view where the library has flagged the list as genuinely empty. */
-        #listContainer.view-favorites:not(:has(.scroll-list-slot[data-fav="true"])) .scroll-list::before,
-        #listContainer:has(.scroll-list-empty.visible) .scroll-list::before {
+        /* Targets #listContainer::before now that the rule lives on the
+           container — the old .scroll-list::before selectors no longer
+           match anything, so an empty list would have kept its line. */
+        #listContainer.view-favorites:not(:has(.scroll-list-slot[data-fav="true"]))::before,
+        #listContainer:has(.scroll-list-empty.visible)::before {
             display: none;
         }
         .favorites-empty-icon {
@@ -825,6 +831,26 @@
                    this panel) already has them. Flat top meets flat
                    search-bar bottom, no visible seam. */
                 border-radius: 0;
+                /* Anchor for the centre column rule below. */
+                position: relative;
+            }
+            /* Centre column rule. Lives on the CONTAINER, not on the
+               scrolling grid: an absolutely-positioned child of a scroll
+               container is sized against the visible box, so it ran out
+               partway down and then scrolled away with the rows. Anchored
+               here it simply stays put — one steady line down the middle,
+               whatever the list is doing. */
+            #listContainer::before {
+                content: '';
+                position: absolute;
+                top: 16px;
+                bottom: 16px;
+                left: calc(50% - 4px);
+                transform: translateX(-50%);
+                width: 1px;
+                background: rgba(255, 255, 255, 0.10);
+                pointer-events: none;
+                z-index: 0;
             }
             #listContainer .scroll-list {
                 display: grid;
@@ -861,7 +887,11 @@
                    the thumb+title+button row still fits at ~380px per
                    column without the button wrapping. */
                 body #listContainer .drive-item {
-                    padding: 14px 10px;
+                    padding: 14px 8px;
+                    /* Narrow desktop: the column itself is the constraint, so
+                       let the card use all of it rather than capping at a
+                       width the column cannot give it anyway. */
+                    max-width: 100%;
                 }
             }
             /* Vertical column separator — thin line down the middle of
@@ -878,16 +908,10 @@
                `translateX(-50%)` then centers the 1px line ON that
                midpoint so it's not a hair off due to sub-pixel
                left-edge positioning. */
+            /* Superseded by #listContainer::before above — this one scrolled
+               with the rows and stopped short of the content. */
             #listContainer .scroll-list::before {
-                content: '';
-                position: absolute;
-                top: 16px;
-                bottom: 16px;
-                left: calc(50% - 4px);
-                transform: translateX(-50%);
-                width: 1px;
-                background: rgba(255, 255, 255, 0.10);
-                pointer-events: none;
+                content: none;
             }
 
             /* ============================================================
@@ -1050,6 +1074,113 @@
                 min-height: 0;
                 padding: 22px 22px 20px;
             }
+
+            /* ── Rename modal ──────────────────────────────────────
+               Exception to the canonical 760x520 size, like File Info and
+               the QR scanner before it. This is a single text field and two
+               buttons — at 760x520 the field floated in a field of empty
+               glass. Amir asked for it smaller. Everything else about the
+               shell (glass fill, border, 22px radius) still inherits; only
+               the two size numbers and the padding are overridden. */
+            .modal-overlay .modal.rename-modal {
+                max-width: 460px;
+                min-height: 0;
+                display: flex;
+                flex-direction: column;
+                padding: 26px 26px 22px;
+            }
+            .rename-body {
+                display: flex;
+                flex-direction: column;
+                min-height: 0;
+            }
+            .rename-title {
+                margin: 0 0 6px;
+                font-size: 20px;
+                font-weight: 700;
+                color: #fff;
+                letter-spacing: -0.02em;
+            }
+            .rename-sub {
+                margin: 0 0 18px;
+                font-size: 13px;
+                line-height: 1.5;
+                color: rgba(255, 255, 255, 0.55);
+            }
+            .rename-label {
+                display: block;
+                font-size: 11px;
+                font-weight: 700;
+                letter-spacing: 0.06em;
+                text-transform: uppercase;
+                color: rgba(255, 255, 255, 0.45);
+                margin-bottom: 8px;
+            }
+            /* 2px border + 600 weight — the iOS "simple but bold" rule
+               used on every other outlined control in the app. */
+            .rename-input {
+                width: 100%;
+                box-sizing: border-box;
+                padding: 13px 15px;
+                border-radius: 12px;
+                border: 2px solid rgba(255, 255, 255, 0.16);
+                background: rgba(10, 10, 10, 0.55);
+                color: #fff;
+                font-size: 15px;
+                font-weight: 600;
+                font-family: inherit;
+                outline: none;
+                transition: border-color 0.15s ease, background 0.15s ease;
+            }
+            .rename-input::placeholder {
+                color: rgba(255, 255, 255, 0.3);
+                font-weight: 500;
+            }
+            .rename-input:focus {
+                border-color: rgba(168, 206, 56, 0.75);
+                background: rgba(10, 10, 10, 0.7);
+            }
+            /* Original name on the left, Reset on the right. Reset lives on
+               this line rather than in the button row: at 460px three
+               equal-width buttons would each be ~135px and "Reset to
+               original" would wrap inside its own pill. */
+            .rename-hint {
+                display: flex;
+                align-items: baseline;
+                justify-content: space-between;
+                gap: 12px;
+                margin-top: 10px;
+                font-size: 12px;
+                color: rgba(255, 255, 255, 0.4);
+                min-height: 17px;   /* reserve the line so Save never jumps */
+            }
+            .rename-hint-orig {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .rename-hint .rename-orig {
+                color: rgba(255, 255, 255, 0.7);
+                font-weight: 600;
+            }
+            /* Text button, not a pill — it is the quiet third option. */
+            .rename-reset {
+                flex: none;
+                background: none;
+                border: none;
+                padding: 0;
+                font: inherit;
+                font-weight: 700;
+                color: rgba(168, 206, 56, 0.9);
+                cursor: pointer;
+                white-space: nowrap;
+            }
+            .rename-reset:hover { color: #a8ce38; }
+            .rename-reset[hidden] { display: none; }
+            .rename-actions {
+                margin-top: 20px;
+            }
+
             /* Modal overlay scrim — 75% dim on the page behind every modal
                so the modal's iOS-frosted-glass reads against a calmer
                background. Tuned by eye once it actually rendered (the rule
@@ -1254,7 +1385,7 @@
             .share-pill {
                 display: none;
                 position: fixed;
-                right: 22px;
+                right: 32px;      /* nudged 10px further from the edge */
                 bottom: 22px;
                 z-index: 1200;      /* above modals' 1000 so it survives a close */
                 align-items: center;
@@ -2481,6 +2612,21 @@
                 color: rgba(255, 255, 255, 0.5);
             }
             /* Open pill — same outlined-green language as the list rows. */
+            /* A file that is no longer on disk. The row keeps its shape —
+               only the meta line turns red and Open is disabled. */
+            .folder-file.is-missing .folder-file-name,
+            .folder-file.is-missing .folder-file-thumb {
+                opacity: 0.55;
+            }
+            .folder-file.is-missing .folder-file-meta {
+                color: #ef4a5f;
+                font-weight: 600;
+            }
+            .folder-file-open:disabled {
+                opacity: 0.45;
+                cursor: default;
+                filter: grayscale(1);
+            }
             .folder-file-open {
                 flex-shrink: 0;
                 min-width: 72px;
@@ -3244,9 +3390,13 @@
             background: transparent;          /* no card fill — the rounded shape only reveals on hover */
             border: none;
             border-radius: 20px;              /* bumpier iOS corners */
-            padding: 16px 16px;
+            padding: 16px 14px;
             box-shadow: none;
-            max-width: 440px;
+            /* Wider: at 440px the one-line detail row ("2 Files • Downloading
+               (13%) – 32.4 MB/s") ran out of room and ellipsised. The extra
+               60px plus slightly tighter side padding buys back roughly six
+               characters, which covers it. */
+            max-width: 500px;
             margin: 0 auto;
             gap: 14px;                        /* between thumb and content */
         }
@@ -3331,68 +3481,38 @@
             left: 2%;
             right: 22%;
         }
-        /* Stopped / errored / paused shares read as switched-off: fully
-           desaturated and dimmed. The library's own rule uses
-           saturate(0.3) on .drive-item-inner, which barely registers and
-           doesn't reach the desktop thumbnail. Grayscale the whole card
-           instead — but keep the action button and kebab in colour so
-           Retry and the menu stay obviously usable. */
-        body #listContainer .drive-item.is-paused .drive-item-thumb,
-        body #listContainer .drive-item.is-paused .drive-item-content {
-            filter: grayscale(1);
-            opacity: 0.55;
-        }
-        body #listContainer .drive-item.is-paused .drive-item-status-line {
-            filter: none;
-            opacity: 1;
-        }
-        body #listContainer .drive-item.is-paused .drive-item-row-action,
-        body #listContainer .drive-item.is-paused .drive-item-menu-container {
-            filter: none;
-            opacity: 1;
-        }
+        /* A dimmed/greyscale treatment used to live here for stopped shares.
+           Removed: per the Figma an inactive card is visually identical to an
+           active one — only its status text changes colour, plus the light
+           saturate() below.
+           The old note here claimed `missing` still dimmed via the library's
+           is-paused class. It doesn't: `missing` sets dimItem:false, and that
+           class is now `is-dimmed`, which only `error` triggers. */
 
-        /* Dash + transfer rate after the status text. The dash is muted so
-           the status colour stays the emphasis; the rate sits between the
-           two in weight. */
-        body #listContainer .drive-item .drive-item-status-dash {
-            color: rgba(255, 255, 255, 0.30);
-            margin: 0 2px;
-        }
-        body #listContainer .drive-item .drive-item-status-speed {
-            color: rgba(255, 255, 255, 0.60);
-            font-variant-numeric: tabular-nums;
-        }
-
-        /* Hide the kebab on any row that is mid-transfer. Keyed off the
-           presence of the cancel button rather than a status list, so it
-           tracks exactly the states that render one — downloading,
-           connecting, and a share still under 100%. The X takes its slot;
-           right-click still opens the context menu. */
+        /* Mid-transfer the row shows ONE control: the red cancel X. The
+           kebab is hidden — its actions (copy link, favourite, remove) are
+           either meaningless or destructive while data is moving, and the
+           right-click menu still reaches them if needed.
+           Keyed off the presence of the cancel button rather than a status
+           list, so it tracks exactly the states that render one.
+           NOTE: this rule was previously lost when the greyscale block above
+           it was removed; the kebab silently came back. */
         body #listContainer .drive-item:has(.drive-item-row-action-cancel) .drive-item-menu-container {
             display: none;
         }
-
-        /* Exit animation. The library slides the slot out to the right
-           (translateX(110%)), which fights the centred, calm feel of the v2
-           list — and in a 2-column grid a card flying sideways across its
-           neighbour reads as a glitch. Sink and fade in place instead,
-           while the height collapses so the rows below close the gap.
-           `body ` prefix: the library injects its styles at runtime, after
-           this sheet. */
-        body #listContainer .scroll-list-slot.is-leaving {
-            transform-origin: center;
-            transition:
-                max-height 260ms cubic-bezier(0.4, 0, 0.2, 1),
-                opacity 200ms ease-out,
-                transform 260ms cubic-bezier(0.4, 0, 0.2, 1),
-                filter 200ms ease-out;
+        /* Same reasoning as the row action: the library gives this a
+           `margin-top: 6px` nudge to sit under a top-aligned row. With the
+           action centred, the kebab has to match or the two sit at
+           different heights next to each other. */
+        body #listContainer .drive-item .drive-item-menu-container {
+            align-self: center;
+            margin-top: 0;
         }
-        body #listContainer .scroll-list-slot.is-leaving.is-left {
-            max-height: 0;
-            opacity: 0;
-            transform: scale(0.92);
-            filter: blur(2px);
+        /* With the kebab gone, the X takes that slot instead of leaving a
+           hole where it used to be. */
+        body #listContainer .drive-item:has(.drive-item-row-action-cancel) .drive-item-row-action-cancel {
+            margin-right: 0;
+            margin-left: 10px;
         }
 
         body #listContainer .drive-item:hover {
@@ -3416,6 +3536,30 @@
             font-size: 13px;
             font-weight: 600;
             line-height: 1.2;
+            /* ONE line, always. With the rate appended this row can read
+               "2 Files • Downloading (13%) – 32.4 MB/s", which overflows a
+               narrow card and wrapped to two lines — pushing the card taller
+               than its neighbour and breaking the grid row. */
+            flex-wrap: nowrap;
+            white-space: nowrap;
+            min-width: 0;
+            overflow: hidden;
+        }
+        /* Each part keeps its own text on one line too, and the file-count
+           and type prefixes never shrink — they are short and load-bearing.
+           The rate is the first thing allowed to disappear, being the least
+           important of the three. */
+        body #listContainer .drive-item .drive-item-status-count,
+        body #listContainer .drive-item .drive-item-status-type,
+        body #listContainer .drive-item .drive-item-status-label {
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        body #listContainer .drive-item .drive-item-status-speed {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            min-width: 0;
         }
         body .drive-item-status-count {
             display: inline-flex;
@@ -3480,24 +3624,69 @@
             height: 100%;
         }
         /* Color mapping per [data-status]. Green = healthy/done,
-           red = broken/off, amber = in-progress, grey = paused. */
+           red = broken/off, amber = in-progress. */
         body .drive-item-status-line[data-status="sharing"] .drive-item-status-label,
         body .drive-item-status-line[data-status="complete"] .drive-item-status-label {
             color: #6ac168;                 /* pear-green */
         }
         body .drive-item-status-line[data-status="inactive"] .drive-item-status-label,
         body .drive-item-status-line[data-status="error"] .drive-item-status-label,
-        body .drive-item-status-line[data-status="missing"] .drive-item-status-label {
+        body .drive-item-status-line[data-status="missing"] .drive-item-status-label,
+        body .drive-item-status-line[data-status="lost"] .drive-item-status-label,
+        body .drive-item-status-line[data-status="unreachable"] .drive-item-status-label {
             color: #ff6b6b;                 /* red */
+        }
+        /* Interrupted is amber, not red. Red is for things that FAILED and
+           need re-doing (error, files removed); a dropped transfer has not
+           failed — the bytes are on disk and Resume picks up where it
+           stopped. Same warning family as the old paused label. */
+        body .drive-item-status-line[data-status="interrupted"] .drive-item-status-label {
+            color: #eab308;                 /* amber */
         }
         body .drive-item-status-line[data-status="downloading"] .drive-item-status-label,
         body .drive-item-status-line[data-status="connecting"] .drive-item-status-label,
+        body .drive-item-status-line[data-status="initiating"] .drive-item-status-label,
         body .drive-item-status-line[data-status="sharing-progress"] .drive-item-status-label {
-            color: #f0b840;                 /* amber — mid-transfer */
+            color: #f0b840;                 /* amber — mid-transfer / not yet live */
         }
-        body .drive-item-status-line[data-status="paused"] .drive-item-status-label {
-            color: rgba(255, 255, 255, 0.5);
+
+        /* ─── Inactive card desaturation (tunable) ─────────────────
+           A light mute on inactive cards so a dead row reads as dead at a
+           glance, without the old full-greyscale treatment that made the
+           card look broken.
+
+           Deliberately NOT applied to the whole card. `filter` composites
+           the entire subtree, so a card-wide saturate() would also drain
+           the red "Inactive" label — the one element that has to stay
+           legible. So it hits only where colour actually lives: the
+           thumbnail and the row action button. Text is muted with opacity
+           instead, which leaves hue alone.
+
+           The two values are custom properties so they can be tuned live
+           in DevTools without a reload:
+             document.documentElement.style.setProperty('--inactive-sat', '0.3')
+             document.documentElement.style.setProperty('--inactive-fade', '0.8')
+           Range that reads well: sat 0.35–0.75, fade 0.85–1. */
+        :root {
+            --inactive-sat: 0.55;
+            --inactive-fade: 0.92;
         }
+        body .drive-item[data-status="inactive"] .drive-item-thumb,
+        body .drive-item[data-status="inactive"] .drive-item-row-action {
+            filter: saturate(var(--inactive-sat));
+            transition: filter 0.2s ease;
+        }
+        body .drive-item[data-status="inactive"] .drive-item-title,
+        body .drive-item[data-status="inactive"] .drive-item-meta {
+            opacity: var(--inactive-fade);
+        }
+        /* The red "Inactive" label is untouched on purpose — it is the one
+           element that has to stay at full strength, since it's what tells
+           the user why the card looks muted.
+           No override is needed to protect it: .drive-item-status-line is a
+           SIBLING of .drive-item-meta, not a child, so the fade above never
+           reaches it. (An override would be theatre anyway — a child cannot
+           undo a parent's opacity the way it can partly undo a filter.) */
 
         /* ─── Desktop v2 row action buttons (Figma) ────────────────
            Right-side per-row action, sitting between the row content
@@ -3510,6 +3699,12 @@
             display: inline-flex;
             align-items: center;
             justify-content: center;
+            /* The card is `display:flex; align-items:flex-start` (set by the
+               library), so a direct child sits at the TOP of a ~56px row.
+               That is why the cancel circle looked high — the glyph inside it
+               was centred all along, the circle was not. Centre the action
+               against the row instead. */
+            align-self: center;
             flex-shrink: 0;
             margin: 0 6px 0 8px;
             font-family: inherit;
@@ -3520,6 +3715,29 @@
         }
         body #listContainer .drive-item .drive-item-row-action:active {
             transform: scale(0.96);
+        }
+        /* Interrupted rows carry TWO actions (Resume + cancel X). Targeted at
+           that exact pair rather than a generic sibling selector: the generic
+           one tied on specificity with the `:has(...)` cancel rule further up
+           and the winner came down to source order, which is not something to
+           leave to chance.
+           The gap between them is the ONLY thing set here. The row lays out
+           from the right edge, so cancel's position is fixed by the kebab
+           after it — shrinking this gap slides RESUME rightward toward
+           cancel and leaves cancel exactly where it was. 4px reads as one
+           control pair; the default `margin: 0 6px 0 8px` on each left 14px,
+           which read as two unrelated buttons. */
+        body #listContainer .drive-item .drive-item-row-action-resume {
+            margin-right: 4px;
+        }
+        body #listContainer .drive-item .drive-item-row-action-resume + .drive-item-row-action-cancel {
+            margin-left: 0;
+            margin-right: 0;
+        }
+        /* Share + Clear on a lost share: same pairing logic as above, so the
+           two pills group instead of drifting apart. */
+        body #listContainer .drive-item .drive-item-row-action-open + .drive-item-row-action-retry {
+            margin-left: 0;
         }
 
         /* OPEN — green pill (secondary style: dark fill + green outline
@@ -3567,6 +3785,97 @@
         /* CANCEL X — red outlined circle. Matches the canonical modal
            close-button treatment (2px red border + red glyph) so "close /
            cancel / dismiss" reads consistently across the app. */
+        /* RESUME — green twin of the cancel circle. Same 32px, same 2px
+           border, same 16px icon box, so the pair on an interrupted row
+           reads as one control group rather than two mismatched buttons.
+           Green because it continues the transfer; the X beside it stays
+           red because it discards it. */
+        body #listContainer .drive-item .drive-item-row-action-resume {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: transparent;
+            border: 2px solid rgba(168, 206, 56, 0.75);
+            color: rgba(168, 206, 56, 0.95);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            line-height: 0;
+            box-sizing: border-box;
+        }
+        body #listContainer .drive-item .drive-item-row-action-resume:hover {
+            background: rgba(168, 206, 56, 0.14);
+            border-color: rgba(168, 206, 56, 1);
+        }
+        /* 16px on a 28px content box — both even, so the icon lands on
+           whole pixels. Same reasoning as the cancel glyph below: an odd
+           size leaves a half-pixel the browser rounds inconsistently
+           between the two axes, which is what made the X look off-centre
+           through several attempts. */
+        body #listContainer .drive-item .drive-item-row-action-resume svg {
+            width: 16px;
+            height: 16px;
+            display: block;
+            margin: 0;
+            flex-shrink: 0;
+        }
+
+        /* ─── Resume glow (REVERSIBLE: delete this whole block) ───
+           Slow 2s pulse so a stalled row asks for attention without the
+           flashing-badge noise of the old UI. Two layers: the triangle
+           itself, and a halo on the circle around it.
+
+           CRITICAL: both keyframes declare the SAME number of drop-shadow
+           functions. A filter list only interpolates when the two sides
+           match in length and type — mismatched lists snap discretely
+           instead of fading, which reads as "no animation at all". The 0%
+           stop therefore carries three zero-size shadows rather than none.
+
+           The `prefers-reduced-motion` guard below is NOT optional: a
+           pulsing element is exactly what that setting exists to stop, and
+           for some people motion like this causes real discomfort. If the
+           glow is invisible on a given machine, that setting is the first
+           thing to check — turn animations on there rather than removing
+           this. */
+        @keyframes drive-item-resume-glow {
+            0%, 100% {
+                filter: drop-shadow(0 0 0 rgba(214, 255, 120, 0))
+                        drop-shadow(0 0 0 rgba(168, 206, 56, 0))
+                        drop-shadow(0 0 0 rgba(168, 206, 56, 0));
+            }
+            50% {
+                filter: drop-shadow(0 0 4px rgba(214, 255, 120, 1))
+                        drop-shadow(0 0 10px rgba(168, 206, 56, 0.95))
+                        drop-shadow(0 0 18px rgba(168, 206, 56, 0.6));
+            }
+        }
+        /* Halo on the circle, so the whole control lifts rather than just
+           the glyph inside it. */
+        @keyframes drive-item-resume-ring {
+            0%, 100% {
+                box-shadow: 0 0 0 0 rgba(168, 206, 56, 0);
+                border-color: rgba(168, 206, 56, 0.75);
+            }
+            50% {
+                box-shadow: 0 0 16px 2px rgba(168, 206, 56, 0.7);
+                border-color: rgba(168, 206, 56, 1);
+            }
+        }
+        body #listContainer .drive-item .drive-item-row-action-resume svg {
+            animation: drive-item-resume-glow 2s ease-in-out infinite;
+        }
+        body #listContainer .drive-item .drive-item-row-action-resume {
+            animation: drive-item-resume-ring 2s ease-in-out infinite;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            body #listContainer .drive-item .drive-item-row-action-resume svg,
+            body #listContainer .drive-item .drive-item-row-action-resume {
+                animation: none;
+            }
+        }
+        /* ─── end resume glow ─── */
+
         body #listContainer .drive-item .drive-item-row-action-cancel {
             width: 32px;
             height: 32px;
@@ -3583,7 +3892,6 @@
             justify-content: center;
             padding: 0;
             line-height: 0;
-            position: relative;      /* anchor for the absolutely-centred svg */
             box-sizing: border-box;
         }
         /* Absolute centring: independent of line boxes, UA button padding
@@ -3591,13 +3899,21 @@
            The circle is 32px with a 2px border, so the padding box is 28px
            and 50%/50% lands on its exact centre. */
         body #listContainer .drive-item .drive-item-row-action-cancel svg {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 15px;
-            height: 15px;
+            /* Centred by the flex box itself. The earlier absolute
+               positioning centred against the BORDER box, so the 2px border
+               pushed the glyph half a pixel down-right — visible at this
+               size. Letting flex place it inside the content box is exact. */
+            /* 14px, not 15. The button is 32px with a 2px border, so the
+               content box is 28px — and 28 - 15 = 13, leaving a 6.5px
+               fractional offset that the browser rounds one way horizontally
+               and another vertically. That half pixel is the entire reason
+               this looked off-centre through several different centring
+               attempts. 28 - 14 = 14, so it lands on exact integers. */
+            width: 16px;
+            height: 16px;
             display: block;
+            margin: 0;
+            flex-shrink: 0;
         }
         body #listContainer .drive-item .drive-item-row-action-cancel:hover {
             background: rgba(255, 100, 100, 0.12);
@@ -5123,76 +5439,6 @@
            give up. Not in the Figma — this state wasn't designed, so it
            follows the established overlay language rather than inventing a
            new one. */
-        .drive-dropped-overlay {
-            position: absolute;
-            inset: 0;
-            z-index: 5;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            padding: 10px 14px;
-            /* Match the card, not the slot. `inherit` took the slot's radius
-               (none), so the glass had square corners overhanging the card's
-               rounded ones. Same 20px as body #listContainer .drive-item. */
-            border-radius: 20px;
-            background: rgba(46, 48, 55, 0.35);
-            backdrop-filter: blur(6px) saturate(150%);
-            -webkit-backdrop-filter: blur(6px) saturate(150%);
-            animation: drive-delete-fade-in 0.18s ease-out;
-        }
-        .drive-dropped-text {
-            font-size: 13px;
-            font-weight: 700;
-            color: #ffb020;
-            text-align: center;
-        }
-        .drive-dropped-sub {
-            font-size: 11.5px;
-            font-weight: 500;
-            color: rgba(255, 255, 255, 0.55);
-            margin-top: -6px;
-        }
-        .drive-dropped-actions {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-top: 2px;
-        }
-        .drive-dropped-btn {
-            height: 34px;
-            padding: 0 18px;
-            border-radius: 12px;
-            font-family: inherit;
-            font-size: 13px;
-            font-weight: 700;
-            cursor: pointer;
-            background: transparent;
-            transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
-        }
-        .drive-dropped-btn:active { transform: translateY(1px); }
-        .drive-dropped-btn.resume {
-            border: 2px solid rgba(168, 206, 56, 0.65);
-            color: #a8ce38;
-        }
-        .drive-dropped-btn.resume:hover {
-            background: rgba(168, 206, 56, 0.14);
-            border-color: rgba(168, 206, 56, 0.95);
-        }
-        .drive-dropped-btn.cancel {
-            border: 2px solid rgba(239, 74, 95, 0.55);
-            color: #ef4a5f;
-        }
-        .drive-dropped-btn.cancel:hover {
-            background: rgba(239, 74, 95, 0.12);
-            border-color: rgba(239, 74, 95, 0.9);
-        }
-        .scroll-list-slot.is-dropped > *:not(.drive-dropped-overlay) {
-            opacity: 0.45;
-            pointer-events: none;
-        }
-
         /* "Cancelling…" — same footprint as the countdown's final state, but
            no ring and no undo: cancelling happens immediately. */
         .drive-cancel-label {
@@ -5714,6 +5960,37 @@
     </div>
 
     <!-- ============================================================
+         Rename Modal — opened from a drive card's 3-dot "Rename".
+         Sets a LOCAL display name (alias) for the card. It never
+         renames a file on disk and never travels to peers; the stored
+         name in drives-state.json is left untouched, so Reset always
+         has something true to go back to.
+         Canonical modal shell — .rename-modal only styles its insides.
+         ============================================================ -->
+    <div class="modal-overlay rename-modal-overlay" id="renameModalOverlay">
+        <div class="modal rename-modal" role="dialog" aria-modal="true" aria-labelledby="renameTitle">
+            <div class="rename-body">
+                <h2 class="rename-title" id="renameTitle">Rename</h2>
+                <p class="rename-sub">
+                    Only changes how this appears in PearDrop. Files on disk — and what
+                    peers see — stay the same.
+                </p>
+                <label class="rename-label" for="renameInput">Display name</label>
+                <input type="text" class="rename-input" id="renameInput"
+                       maxlength="120" spellcheck="false" autocomplete="off">
+                <div class="rename-hint">
+                    <span class="rename-hint-orig" id="renameHint"></span>
+                    <button type="button" class="rename-reset" id="renameResetBtn" hidden>Reset to original</button>
+                </div>
+            </div>
+            <div class="modal-actions rename-actions">
+                <button type="button" class="modal-btn secondary" id="renameCancelBtn">Cancel</button>
+                <button type="button" class="modal-btn primary" id="renameSaveBtn">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================
          File Info Modal (Desktop v2 redesign, Figma screen #19) —
          opened from a drive card's 3-dot menu "Properties" item.
          Follows the canonical modal appearance (760px wide, iOS
@@ -5862,17 +6139,10 @@
                 <div class="send-progress-file" id="sendProgressFile">&mdash;</div>
 
                 <!-- Static bold labels; only the numbers change. -->
-                <div class="send-progress-stats">
-                    <div class="send-progress-stat">
-                        <div class="send-progress-stat-label" id="sendProgressFilesLabel">Files</div>
-                        <div class="send-progress-stat-value send-progress-num" id="sendProgressFiles">0</div>
-                    </div>
-                    <div class="send-progress-stat-div" aria-hidden="true"></div>
-                    <div class="send-progress-stat">
-                        <div class="send-progress-stat-label">Size</div>
-                        <div class="send-progress-stat-value send-progress-num" id="sendProgressBytes">0 B</div>
-                    </div>
-                </div>
+                <!-- Stats are rebuilt by the renderer: a group shows
+                     Files / Size / Time left, a single file just Size /
+                     Time left (a file count of 1 says nothing). -->
+                <div class="send-progress-stats" id="sendProgressStats"></div>
 
                 <div class="send-progress-actions">
                     <button type="button" class="send-progress-bg-btn" id="sendProgressBgBtn">Continue in Background</button>

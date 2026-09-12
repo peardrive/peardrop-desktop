@@ -17,6 +17,7 @@
  *   - openInfoModal / closeInfoModal     — File Info (screen #19)
  *   - openFolderModal / closeFolderModal — Folder contents (screen #22)
  *   - openSendModal / closeSendModal     — Send modal (screen #14)
+ *   - openRenameModal / closeRenameModal — Rename (local alias)
  *
  * WINDOW-EXPOSED CONTROLLERS:
  *   - shareProgress { begin, finish, fail } — drives Send-modal State C
@@ -232,11 +233,36 @@ function init() {
             const item = new DriveItem(slot, {
                 data: data,
                 show: getPresetForDrive(data),
-                theme: 'dark'
+                theme: 'dark',
+                // Demo rows are UI scaffolding, not drives. Every menu action
+                // would act on an id no backend has ever heard of — Rename
+                // would write a permanent alias for a card that vanishes on
+                // reload, Remove/Stop sharing would call IPC with a bogus id.
+                // No kebab, no right-click, no long-press.
+                showMenu: data.isDemo !== true
             });
             
             // Handle DriveItem actions via DriveActions module
             item.on('action', async (event) => {
+                // ─── Demo rows short-circuit here ────────────────────
+                // They have no drive behind them, so every action below
+                // would reach IPC with an id the engine has never seen —
+                // and `remove` deletes files for the id it is given.
+                // Handle the two the interrupted card offers, drop the rest.
+                if (event.data && event.data.isDemo) {
+                    const demoId = event.data.id;
+                    if (event.action === 'resume') {
+                        updateDriveInList({ id: demoId, status: 'downloading', speed: 0 });
+                        _demoRunProgress(demoId);
+                    } else if (event.action === 'remove') {
+                        const t = _demoTimers.get(demoId);
+                        if (t) { clearInterval(t); _demoTimers.delete(demoId); }
+                        removeDriveFromList(demoId, { animate: true });
+                        showToast('Download cancelled');
+                    }
+                    return;
+                }
+
                 // ─── New Desktop v2 menu actions (Figma screen #18) ──
                 // These live entirely in the renderer and don't hit
                 // DriveActions / the backend. `properties` opens the new
@@ -280,6 +306,13 @@ function init() {
                     showShareModal(link);
                     return;
                 }
+                if (event.action === 'rename') {
+                    // Stored drive FIRST so its originalTitle/alias survive —
+                    // event.data is the item's own copy and may predate them.
+                    const storedDrive = drives.find(d => d.id === event.data.id);
+                    window.openRenameModal?.({ ...event.data, ...(storedDrive || {}) });
+                    return;
+                }
                 if (event.action === 'properties') {
                     const storedDrive = drives.find(d => d.id === event.data.id);
                     // openInfoModal lives inside the desktop top-bar IIFE that
@@ -307,14 +340,129 @@ function init() {
                 // Remove flow: start a 5s undo countdown. Backend isn't called
                 // until the timer expires. Undo cancels the timer and restores
                 // the drive UI — no rollback needed because nothing ran yet.
+                // Retry on a "Files removed" row means FETCH IT AGAIN, not
+                // resume. drives-resume reopens existing local storage, and
+                // for this row that storage is exactly what is gone — it
+                // would fail every time. The share link survives, so the
+                // useful action is the normal download flow.
+                // Rebuild a lost share from its source files.
+                //
+                // The Corestore is gone, so the old key and its peardrop://
+                // link are dead for good — this creates a genuinely NEW share
+                // from the same files, and says so rather than pretending the
+                // old link came back.
+                if (event.action === 'reshare') {
+                    const d = drives.find(x => x.id === event.data.id) || event.data;
+                    const files = (d.files || []).filter(f => f && f.path);
+                    if (!files.length) {
+                        showToast('No file paths recorded for this share', 'error');
+                        return;
+                    }
+
+                    // Check before promising. The whole premise is that the
+                    // files survived the Corestore; if they did not, say so
+                    // instead of failing halfway through a rebuild.
+                    let present = files;
+                    try {
+                        const exists = await window.electronAPI.filesExist(files.map(f => f.path));
+                        present = files.filter(f => exists?.[f.path] !== false);
+                    } catch (_) { /* check unavailable — attempt anyway */ }
+
+                    if (!present.length) {
+                        showToast('Those files are no longer on this computer', 'error');
+                        return;
+                    }
+                    const missingCount = files.length - present.length;
+
+                    showToast(missingCount
+                        ? `Re-sharing ${present.length} of ${files.length} files…`
+                        : 'Re-sharing…');
+                    try {
+                        const shareName = present.length === 1 ? present[0].name : 'Folder';
+                        const result = await window.electronAPI.hyperdriveShare({
+                            files: present.map(f => ({ name: f.name, size: f.size, path: f.path })),
+                            options: { name: shareName }
+                        });
+                        if (!result?.success) {
+                            showToast(result?.error || 'Could not re-share', 'error');
+                            return;
+                        }
+                        // Only drop the dead row once the new share exists —
+                        // a failure part-way through must not lose the record
+                        // of what these files were.
+                        await window.electronAPI.drivesRemove({
+                            id: event.data.id, deleteFiles: false });
+                        removeDriveFromList(event.data.id);
+
+                        addDriveToList({
+                            id: result.driveId,
+                            title: shareName,
+                            size: present.reduce((n, f) => n + (f.size || 0), 0),
+                            fileCount: present.length,
+                            files: present.map(f => ({ name: f.name, size: f.size, path: f.path })),
+                            status: announcedDrives.has(result.driveId) ? 'sharing' : 'initiating',
+                            peers: 0,
+                            type: 'share',
+                            shareLink: result.shareLink
+                        }, { animate: true });
+                        showToast('Shared again — this is a new link');
+                    } catch (err) {
+                        showToast('Could not re-share: ' + (err.message || 'unknown'), 'error');
+                    }
+                    return;
+                }
+
+                // Resume on an INTERRUPTED download continues the transfer.
+                // drives-resume is the wrong call here: it reopens a drive for
+                // seeding. What this row needs is the download loop re-entered,
+                // which main resumes into the same files via resumePaths.
+                if (event.action === 'resume' && event.data.status === 'interrupted') {
+                    const link = event.data.shareLink
+                        || drives.find(d => d.id === event.data.id)?.shareLink;
+                    if (!link) {
+                        showToast('No share link for this download', 'error');
+                        return;
+                    }
+                    // Deliberately not pre-checking whether the peer is back:
+                    // rejoining the swarm and waiting IS how you find out.
+                    // Say what is happening so the row is not silently frozen.
+                    updateDriveInList({ id: event.data.id, status: 'connecting', speed: 0 });
+                    showToast('Reconnecting to sender…');
+                    userStartedDownloads.add(event.data.id);
+                    if (typeof handleDownload === 'function') handleDownload(event.data.id, link);
+                    return;
+                }
+
+                if (event.action === 'resume' && event.data.status === 'missing') {
+                    const link = event.data.shareLink
+                        || drives.find(d => d.id === event.data.id)?.shareLink;
+                    if (!link) {
+                        showToast('No share link — this drive cannot be recovered', 'error');
+                        return;
+                    }
+                    // Drop the dead row first: startDownload creates a fresh
+                    // one, and leaving this would show the file twice.
+                    removeDriveFromList(event.data.id);
+                    if (linkInput) linkInput.value = link;
+                    showToast('Downloading again…');
+                    if (typeof startDownload === 'function') startDownload();
+                    return;
+                }
+
                 if (event.action === 'remove') {
                     const d = event.data;
                     const pct = d.progress != null ? Math.round(d.progress * 100) : null;
                     // The X on a transferring row emits 'remove' too, but
                     // "cancel this transfer" and "remove a finished item"
                     // are different questions and deserve different wording.
+                    // 'interrupted' belongs here: the X on a dropped download
+                    // means "cancel this transfer and discard the partials",
+                    // not "remove a finished item from the list". Without it
+                    // the X ran the 5s undo-remove flow instead, which asks a
+                    // different question and leaves the download registered.
                     const inFlight = d.status === 'downloading'
                         || d.status === 'connecting'
+                        || d.status === 'interrupted'
                         || (d.status === 'sharing' && pct != null && pct < 100);
 
                     if (inFlight) {
@@ -410,10 +558,22 @@ function init() {
                 // Update UI based on action result
                 if (result.success) {
                     if (event.action === 'pause') {
-                        updateDriveInList({ id: event.data.id, status: 'paused' });
+                        // Stopped seeding: it is no longer announced, and a
+                        // pending watchdog must not later mark it unreachable.
+                        announcedDrives.delete(event.data.id);
+                        clearInitiatingWatchdog(event.data.id);
+                        updateDriveInList({ id: event.data.id, status: 'inactive' });
                     } else if (event.action === 'resume') {
-                        const status = event.data.type === 'share' ? 'sharing' : 'downloading';
-                        updateDriveInList({ id: event.data.id, status });
+                        // A resumed share re-joins the swarm and re-announces,
+                        // so it is not reachable the instant the IPC returns.
+                        // Same initiating -> sharing path as a fresh share.
+                        if (event.data.type === 'share') {
+                            announcedDrives.delete(event.data.id);
+                            updateDriveInList({ id: event.data.id, status: 'initiating' });
+                            armInitiatingWatchdog(event.data.id);
+                        } else {
+                            updateDriveInList({ id: event.data.id, status: 'downloading' });
+                        }
                     }
                 }
             });
@@ -428,7 +588,16 @@ function init() {
                 try {
                     const result = await window.electronAPI.openFile(file.path);
                     if (!result || result.success === false) {
-                        showToast(result?.error || 'Could not open file', 'error');
+                        // `missing` means the file is gone from disk, which
+                        // deserves plainer wording than a generic failure.
+                        showToast(result?.missing
+                            ? 'That file was removed from your disk'
+                            : (result?.error || 'Could not open file'), 'error');
+                        // Free, authoritative signal: the OS just told us the
+                        // file is gone. Re-check the affected drives rather
+                        // than leaving a card claiming to share something it
+                        // cannot open.
+                        if (result?.missing) reconcileMissingFiles();
                     }
                 } catch (err) {
                     showToast('Could not open file: ' + err.message, 'error');
@@ -444,7 +613,16 @@ function init() {
                 try {
                     const result = await window.electronAPI.openFile(file.path);
                     if (!result || result.success === false) {
-                        showToast(result?.error || 'Could not open file', 'error');
+                        // `missing` means the file is gone from disk, which
+                        // deserves plainer wording than a generic failure.
+                        showToast(result?.missing
+                            ? 'That file was removed from your disk'
+                            : (result?.error || 'Could not open file'), 'error');
+                        // Free, authoritative signal: the OS just told us the
+                        // file is gone. Re-check the affected drives rather
+                        // than leaving a card claiming to share something it
+                        // cannot open.
+                        if (result?.missing) reconcileMissingFiles();
                     }
                 } catch (err) {
                     showToast('Could not open file: ' + err.message, 'error');
@@ -480,6 +658,7 @@ function init() {
 
     // Load existing drives
     loadDrives();
+
 }
 
 /**
@@ -739,7 +918,7 @@ async function startShare() {
         // Must pass { files: [...], options: {} } - not just paths!
         const shareName = activeFiles.length === 1 
             ? activeFiles[0].name 
-            : `${activeFiles.length} files`;
+            : 'Folder';   // placeholder; see note in hyperdrive-manager.createDrive
         
         const result = await window.electronAPI.hyperdriveShare({
             files: activeFiles,
@@ -766,7 +945,10 @@ async function startShare() {
                 size: activeFiles.reduce((sum, f) => sum + (f.size || 0), 0),
                 fileCount: activeFiles.length,
                 files: activeFiles.map(f => ({ name: f.name, size: f.size, path: f.path })),
-                status: 'sharing',
+                // Not 'sharing' yet: the drive exists but its DHT announce
+                // has not landed, so the link works for nobody. markAnnounced
+                // promotes it; the watchdog fails it if it never arrives.
+                status: announcedDrives.has(result.driveId) ? 'sharing' : 'initiating',
                 peers: 0,
                 type: 'share',
                 shareLink: result.shareLink
@@ -848,29 +1030,18 @@ async function startDownload() {
         return;
     }
     
-    // ⚠️ TEMPORARY TEST SWITCH — set back to false before shipping.
+    // Re-downloading a link already in the list is refused: point at the row
+    // that already exists instead. This also covers pasting your OWN share
+    // link, which otherwise opens a second receiver session against a key
+    // this app is already seeding.
     //
-    // The duplicate check normally blocks re-downloading a link already in
-    // the list, including your own share. Lifted so the download/cancel/
-    // resume paths can be exercised against a locally-shared file without
-    // needing a second machine.
-    //
-    // The proper behaviour, still to build, is a glass confirm offering
-    // "Show in list" / "Download again" — see decideDupCheckAction() in
-    // lib/dup-check-action.js, which already models that decision and is
-    // currently unused.
-    const ALLOW_DUPLICATE_DOWNLOADS = true;
-
-    if (dupCheck.isDuplicate && !ALLOW_DUPLICATE_DOWNLOADS) {
+    // A future refinement, already modelled in decideDupCheckAction()
+    // (lib/dup-check-action.js, currently unused), offers a glass confirm
+    // with "Show in list" / "Download again" rather than a flat refusal.
+    if (dupCheck.isDuplicate) {
         highlightExistingDrive(dupCheck.driveId);
         showAlreadyDownloadedMessage('Already downloaded');
         return;
-    }
-    if (dupCheck.isDuplicate) {
-        // Still say something — silently re-downloading a file already in
-        // the list would look like a bug rather than a deliberate override.
-        console.warn('[PearDrop] Duplicate download allowed by test switch', dupCheck.driveId);
-        showToast('Already in your list — downloading again (test mode)');
     }
     
     // 2. Not a duplicate - add to list immediately (animate — fresh download)
@@ -928,7 +1099,9 @@ async function startDownload() {
     
     addDriveToList({
         id: driveId,
-        title: openResult.shareName || 'Download',
+        title: displayTitle(openResult.shareName || 'Download', openResult.files?.length || 1, driveId),
+        originalTitle: baseTitle(openResult.shareName || 'Download', openResult.files?.length || 1),
+        alias: getAlias(driveId),
         size: openResult.totalBytes || 0,
         fileCount: openResult.files?.length || 1,
         files: (openResult.files || []).map(f => ({ name: f.name, size: f.size })),
@@ -939,6 +1112,7 @@ async function startDownload() {
         shareLink: link
     });
     
+    userStartedDownloads.add(driveId);
     handleDownload(driveId, link);
 }
 
@@ -997,6 +1171,18 @@ function showAlreadyDownloadedMessage(message) {
 // made the card flicker as two callers fought over it.
 const downloadsInFlight = new Set();
 
+// Drives the USER asked to download in this session — a fresh paste, or the
+// Resume button. Consulted by 'drive-ready-to-download' to decide whether a
+// reconnect may continue on its own.
+//
+// This replaced a wall-clock test (`Date.now() - APP_START_AT < 20000`) that
+// tried to infer the same thing. That was a race the app kept losing: DHT
+// lookup plus peer connect regularly takes longer than 20s, so a slow resume
+// fell the wrong side of the window and auto-started a download nobody asked
+// for. Intent is a fact we already hold; it does not need to be guessed from
+// a clock.
+const userStartedDownloads = new Set();
+
 async function handleDownload(driveId, link) {
     if (downloadsInFlight.has(driveId)) {
         console.warn('[PearDrop] Download already starting for', driveId, '- ignoring duplicate');
@@ -1009,7 +1195,16 @@ async function handleDownload(driveId, link) {
         // A duplicate that slipped past the local guard: leave the card
         // alone entirely — the run that is actually going owns it.
         if (downloadResult && downloadResult.alreadyRunning) return;
-        
+
+        // The drive is connected but hasn't sent its file list yet. That is a
+        // wait, not a failure — painting the card red here would be wrong, and
+        // the swarm stays joined, so the engine will emit ready-to-download
+        // once the manifest actually arrives.
+        if (downloadResult && downloadResult.notReady) {
+            updateDriveInList({ id: driveId, status: 'connecting', speed: 0 });
+            return;
+        }
+
         if (downloadResult.success) {
             // Provisional. The authoritative state arrives with the
             // 'files-downloaded' event, which knows whether seeding began.
@@ -1232,6 +1427,19 @@ function addDriveToList(drive, options = {}) {
         return;
     }
 
+    // Alias resolution happens HERE, not at each call site. Only four of the
+    // seven callers go through normalizeDrive; the rest build a card by hand
+    // (fresh share, fresh download, the temporary "Connecting…" row), and
+    // those would otherwise show the un-aliased name and give the Rename
+    // modal no original to reset to. One choke point means a new call site
+    // can't silently reintroduce either bug.
+    if (drive.originalTitle == null) drive.originalTitle = drive.title;
+    const existingAlias = getAlias(drive.id);
+    if (existingAlias) {
+        drive.alias = existingAlias;
+        drive.title = existingAlias;
+    }
+
     // Add timestamp for sorting
     drive.addedAt = Date.now();
 
@@ -1251,8 +1459,16 @@ function addDriveToList(drive, options = {}) {
         // Same mechanism for the Favorites tab: CSS filters on this
         // attribute, so switching tabs never re-renders the list.
         result.slot.dataset.fav = isFavorite(drive.id) ? 'true' : 'false';
+        // Demo rows are debug scaffolding and opt OUT of all three tab
+        // filters. Without this a `peardrop.demo()` card is type=download and
+        // simply doesn't appear while the Shares tab is selected (and never
+        // appears under Favorites, since it isn't starred) — it looks like
+        // the demo helper is broken when it is only being filtered.
+        if (drive.isDemo) result.slot.dataset.demo = 'true';
+        // A card that mounts already 'initiating' needs the watchdog running,
+        // or a share that never announces would sit there forever.
+        if (drive.status === 'initiating' && !drive.isDemo) armInitiatingWatchdog(drive.id);
         reindexVisibleSlots();
-        reconcileDroppedOverlays();
     }
 
     // If we have a non-recent sort active, re-apply sorting
@@ -1426,6 +1642,12 @@ function removeDriveFromList(driveId, options = {}) {
         driveInArray: drives.some(d => d.id === driveId)
     });
 
+    // The row is going for good, so the local-only things keyed to it —
+    // its rename and its favorite star — go with it. Left behind they would
+    // accumulate in localStorage forever and re-apply to any drive that
+    // ever reused the id.
+    forgetLocalDriveState(driveId);
+
     // Step 1: Remove from driveItems Map
     const hadDriveItem = driveItems.has(driveId);
     driveItems.delete(driveId);
@@ -1466,23 +1688,234 @@ async function loadDrives() {
     try {
         const result = await window.electronAPI.drivesList();
         if (result.success && Array.isArray(result.drives)) {
+            // Seed reachability BEFORE normalizing: a UI refresh clears this
+            // renderer's Set, but the shares are still announced and main
+            // still knows it. Without this every share re-paints as
+            // "Initiating" on every reload and never gets a second
+            // drive-announced event to correct it.
+            if (Array.isArray(result.announced)) {
+                for (const id of result.announced) announcedDrives.add(id);
+            }
             for (const drive of result.drives) {
                 addDriveToList(normalizeDrive(drive));
             }
+            // Now that the cards exist, find out whether their content still
+            // does. Deferred rather than awaited so the list paints first.
+            reconcileMissingFiles();
         }
     } catch (err) {
         console.error('Error loading drives:', err);
     }
 }
 
+/**
+ * Map an engine drive `state` onto a UI status.
+ * @param {Object} drive - raw entry from the engine
+ * @returns {string} one of the STATUS_CONFIG keys
+ */
+function deriveStatusFromState(drive) {
+    const state = drive.state;
+    const isDownload = drive.isUpload === false || drive.type === 'download';
+
+    // 'paused' is an ENGINE state, not a UI one. The card shows it as
+    // Inactive: from the user's side a stopped share and a share that
+    // failed to come back are the same thing — it isn't running, and the
+    // way to fix it is the same. One less state to explain.
+    if (state === 'paused')  return 'inactive';
+    if (state === 'errored') return 'error';
+
+    if (isDownload) {
+        // 'seeking' + isUpload:false is the engine's marker for a download
+        // that STARTED AND NEVER FINISHED: openDrive writes it when the
+        // transfer begins, and only main promotes it to 'active' once the
+        // files have actually landed. That is precisely the interrupted
+        // state, so say so — it was reported as 'inactive', which reads as
+        // "stopped share" and offers Retry instead of Resume + cancel.
+        // Bytes are already on disk here; Resume continues rather than
+        // restarting.
+        if (state === 'seeking') return 'interrupted';
+        // Finished and now seeding it back to the network.
+        if (state === 'active')  return 'sharing';
+        return 'inactive';
+    }
+
+    // Uploads. 'active' in the manifest means "this drive should be seeding",
+    // NOT "it is reachable right now" — the DHT announce lands seconds after
+    // the drive opens. Start at 'initiating' and let the engine's
+    // drive-announced event promote it, or the watchdog fail it.
+    if (state !== 'active') return 'inactive';
+    return announcedDrives.has(drive.id || drive.driveId) ? 'sharing' : 'initiating';
+}
+
+// ─── Local file availability ────────────────────────────────────────────
+// Does a drive's content still exist on disk?
+//
+// "Files removed" existed as a status for a long time but NOTHING ever set
+// it from a file check — it was only ever produced by a Corestore resume
+// failure, which is a different thing entirely (see statusForResumeError).
+// So the app has never actually noticed a deleted file; it found out when
+// the user clicked Open and Windows threw its own dialog.
+//
+// States deliberately skipped: anything mid-flight (its files are still
+// being written), and 'lost' (already terminal, and its Corestore — not its
+// files — is what went).
+const FILE_CHECK_SKIP_STATUSES = new Set([
+    'downloading', 'connecting', 'initiating', 'interrupted', 'lost', 'missing'
+]);
+
+async function reconcileMissingFiles() {
+    if (!window.electronAPI?.filesExist) return;
+
+    const candidates = drives.filter(d =>
+        d && !d.isDemo
+        && !FILE_CHECK_SKIP_STATUSES.has(d.status)
+        && Array.isArray(d.files)
+        && d.files.some(f => f && f.path));
+    if (!candidates.length) return;
+
+    // One IPC round trip for every path rather than one per drive.
+    const paths = [];
+    for (const d of candidates) {
+        for (const f of d.files) if (f && f.path) paths.push(f.path);
+    }
+
+    let exists;
+    try {
+        exists = await window.electronAPI.filesExist([...new Set(paths)]);
+    } catch (err) {
+        console.warn('[PearDrop] File availability check failed:', err.message);
+        return;
+    }
+    if (!exists) return;
+
+    for (const d of candidates) {
+        const own = d.files.filter(f => f && f.path);
+        const goneCount = own.filter(f => exists[f.path] === false).length;
+        if (goneCount === 0) continue;
+
+        // ALL gone -> the card is about content that is not there any more.
+        // SOME gone -> the drive still has something to offer, so the card
+        // keeps its status; the folder modal is where per-file state belongs.
+        if (goneCount === own.length) {
+            console.warn('[PearDrop] All files gone for drive', d.id);
+            updateDriveInList({ id: d.id, status: 'missing' });
+        } else {
+            console.warn('[PearDrop] Some files gone for drive', d.id,
+                `(${goneCount}/${own.length})`);
+        }
+    }
+}
+
+// ─── Reachability (DHT announce) ────────────────────────────────────────
+// Shares the engine has confirmed announced. A share is open locally well
+// before it is findable, and the card used to claim "Active" for that whole
+// gap — up to 11s in practice.
+const announcedDrives = new Set();
+const initiatingWatchdogs = new Map();
+
+// Five minutes, deliberately far beyond any healthy announce. Cold starts
+// with many drives have been measured at ~11s, but a slow DHT, a bad network
+// or a machine waking from sleep can take far longer, and a share wrongly
+// labelled "Not reachable" is much worse than one that says "Initiating" for
+// a while: the first is a claim the user will act on, the second is patience.
+// This is a last-resort backstop for a genuinely dead announce, not a
+// latency budget.
+const INITIATING_TIMEOUT_MS = 5 * 60 * 1000;
+
+function markAnnounced(driveId) {
+    if (!driveId) return;
+    announcedDrives.add(driveId);
+    clearInitiatingWatchdog(driveId);
+    const cur = driveItems.get(driveId)?.getData?.()?.status
+        || drives.find(d => d.id === driveId)?.status;
+    if (cur === 'initiating') updateDriveInList({ id: driveId, status: 'sharing' });
+}
+
+function clearInitiatingWatchdog(driveId) {
+    const t = initiatingWatchdogs.get(driveId);
+    if (t) { clearTimeout(t); initiatingWatchdogs.delete(driveId); }
+}
+
+// Arm only for a card actually sitting in 'initiating'. Re-arming is safe:
+// the previous timer is cleared first.
+function armInitiatingWatchdog(driveId) {
+    if (!driveId || announcedDrives.has(driveId)) return;
+    clearInitiatingWatchdog(driveId);
+    initiatingWatchdogs.set(driveId, setTimeout(() => {
+        initiatingWatchdogs.delete(driveId);
+        if (announcedDrives.has(driveId)) return;
+        const cur = driveItems.get(driveId)?.getData?.()?.status
+            || drives.find(d => d.id === driveId)?.status;
+        if (cur !== 'initiating') return;
+        console.warn('[PearDrop] Share never announced on the DHT', driveId);
+        updateDriveInList({ id: driveId, status: 'unreachable' });
+    }, INITIATING_TIMEOUT_MS));
+}
+
+// Multi-file shares are shown as "Folder" (placeholder until real folder
+// names land — see the note in hyperdrive-manager.createDrive).
+//
+// New shares are already CREATED with that name, but every drive made before
+// the rename carries "2 files", "70 files", … in drives-state.json and would
+// keep showing it forever, so the list looks half-renamed. This is a DISPLAY
+// rename only: the stored name is never rewritten, so nothing is lost and the
+// engine's manifest stays exactly as it wrote it.
+//
+// Deliberately narrow — it matches only the old generated pattern, so a share
+// the user deliberately named "3 files of mine" keeps its name.
+const LEGACY_MULTI_FILE_NAME = /^\d+\s+files?$/i;
+
+// Stand-in shown for any multi-file share until real folder names land.
+const FOLDER_PLACEHOLDER = 'Folder';
+
+// The name we'd show with no alias set — i.e. what "Reset" restores.
+function baseTitle(rawTitle, fileCount) {
+    const name = String(rawTitle == null ? '' : rawTitle).trim();
+    if (LEGACY_MULTI_FILE_NAME.test(name)) return FOLDER_PLACEHOLDER;
+    // No usable name at all, but we know it holds more than one file.
+    if (fileCount > 1 && (!name || name === 'Unknown')) return FOLDER_PLACEHOLDER;
+    return rawTitle;
+}
+
+/**
+ * Resolve what a card actually shows.
+ * Precedence: user alias > "Folder" placeholder > the engine's stored name.
+ * @param {string} [driveId] omit to skip the alias lookup
+ */
+function displayTitle(rawTitle, fileCount, driveId) {
+    return getAlias(driveId) || baseTitle(rawTitle, fileCount);
+}
+
 function normalizeDrive(drive) {
+    const fileCount = drive.fileCount || drive.files?.length || 1;
+    const id = drive.id || drive.driveId;
+    const rawTitle = drive.name || drive.fileName || drive.title || 'Unknown';
     return {
-        id: drive.id || drive.driveId,
-        title: drive.name || drive.fileName || drive.title || 'Unknown',
+        id,
+        title: displayTitle(rawTitle, fileCount, id),
+        // What the card would show with no alias. The Rename modal needs this
+        // to label the reset, and it must NOT be re-read from `title` — that
+        // is already aliased, so doing so would make the alias its own
+        // "original" the second time the modal opens.
+        originalTitle: baseTitle(rawTitle, fileCount),
+        alias: getAlias(id),
         size: drive.totalBytes || drive.size || 0,
-        fileCount: drive.fileCount || drive.files?.length || 1,
+        fileCount,
         files: drive.files || [],
-        status: drive.status || 'sharing',
+        // Derived from the backend's `state`, NOT defaulted to 'sharing'.
+        //
+        // The engine sends `state` ('seeking' | 'active' | 'paused' |
+        // 'errored'); it never sends `status`. So `drive.status || 'sharing'`
+        // made EVERY restored drive claim to be an active share — including a
+        // download that was interrupted half way. The card came back green
+        // and "Active", with no sign anything was unfinished and no way to
+        // resume it.
+        //
+        // For a download, 'seeking' is the tell: openDrive writes that when
+        // the transfer starts and only main promotes it to 'active' once the
+        // files have actually landed. So seeking + isUpload:false == started
+        // but never finished.
+        status: drive.status || deriveStatusFromState(drive),
         progress: drive.progress,
         speed: drive.speed,
         peers: drive.peers || 0,
@@ -1514,11 +1947,19 @@ function loadFavorites() {
         return new Set();
     }
 }
-let favoritesSet = loadFavorites();
-function isFavorite(id) { return !!id && favoritesSet.has(id); }
+// `var` + lazy accessor for the same reason as aliasMap below: normalizeDrive
+// and removeDriveFromList are hoisted functions defined ABOVE this line that
+// touch this set, and a `let` would leave it in the temporal dead zone until
+// execution got here.
+var favoritesSet;
+function favorites() {
+    if (!favoritesSet) favoritesSet = loadFavorites();
+    return favoritesSet;
+}
+function isFavorite(id) { return !!id && favorites().has(id); }
 function saveFavorites() {
     try {
-        localStorage.setItem(FAVORITES_KEY, JSON.stringify([...favoritesSet]));
+        localStorage.setItem(FAVORITES_KEY, JSON.stringify([...favorites()]));
     } catch (_) { /* quota exceeded / disabled — ignore */ }
 }
 // Row separators and their per-column offsets were keyed off :nth-child,
@@ -1545,10 +1986,99 @@ window.reindexVisibleSlots = reindexVisibleSlots;
 
 function toggleFavorite(id) {
     if (!id) return false;
-    if (favoritesSet.has(id)) favoritesSet.delete(id);
-    else favoritesSet.add(id);
+    if (favorites().has(id)) favorites().delete(id);
+    else favorites().add(id);
     saveFavorites();
-    return favoritesSet.has(id);
+    return favorites().has(id);
+}
+
+// ─── Aliases (client-side, localStorage) ────────────────────────────────
+// A per-drive display name the user sets from the 3-dot menu's "Rename".
+//
+// LOCAL ONLY, BY DESIGN (beta):
+//   - It never travels to peers. The name a receiver sees comes from the
+//     share's `.peardrop.json`, which is written once at create time; we do
+//     not rewrite the drive to rename a card.
+//   - It never touches drives-state.json. The engine's stored name is left
+//     exactly as written, so an alias is always reversible and real folder
+//     names can replace the "Folder" placeholder later with no migration.
+//
+// Known beta trade-off (same one favorites already has): localStorage is
+// per-install, so aliases are lost on a reinstall while the drives they
+// name survive. Accepted for beta; the fix is storing them alongside the
+// drive, which is engine territory.
+const ALIASES_KEY = 'peardrop.aliases.v1';
+const ALIAS_MAX_LEN = 120;
+
+function loadAliases() {
+    try {
+        const raw = localStorage.getItem(ALIASES_KEY);
+        if (!raw) return new Map();
+        const obj = JSON.parse(raw);
+        if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return new Map();
+        return new Map(Object.entries(obj).filter(([, v]) => typeof v === 'string' && v.trim()));
+    } catch (_) {
+        return new Map();
+    }
+}
+// `var`, deliberately — and lazily filled by aliases() below.
+//
+// This file is one long script. `normalizeDrive` and `addDriveToList` are
+// hoisted function declarations defined ABOVE this line, and both call
+// getAlias(). With `let` the binding would sit in the temporal dead zone
+// until execution reached this statement, so a call from above would throw
+// ReferenceError — and in a single-script renderer one uncaught error takes
+// the whole UI down with it (the v0.17.1 incident). `var` hoists to
+// undefined instead, and the accessor fills it in on first use, so the order
+// of definition can no longer matter. Storage is still read exactly once.
+var aliasMap;
+
+function aliases() {
+    if (!aliasMap) aliasMap = loadAliases();
+    return aliasMap;
+}
+
+function saveAliases() {
+    try {
+        localStorage.setItem(ALIASES_KEY, JSON.stringify(Object.fromEntries(aliases())));
+    } catch (_) { /* quota exceeded / disabled — ignore */ }
+}
+
+function getAlias(id) {
+    if (!id) return null;
+    const v = aliases().get(id);
+    return (typeof v === 'string' && v.trim()) ? v : null;
+}
+
+/**
+ * Set or clear a drive's alias.
+ * An empty / whitespace-only name CLEARS it — that is the reset path, so
+ * there is no separate "remove alias" state to keep in sync.
+ * @returns {string|null} the alias now in force, or null if cleared
+ */
+function setAlias(id, name) {
+    if (!id) return null;
+    const clean = String(name == null ? '' : name).trim().slice(0, ALIAS_MAX_LEN);
+    if (!clean) aliases().delete(id);
+    else aliases().set(id, clean);
+    saveAliases();
+    return clean || null;
+}
+
+/**
+ * Forget everything stored locally about a drive that no longer exists.
+ *
+ * Removing a drive used to leave its alias and its favorite flag behind in
+ * localStorage forever — they grew without bound, and a drive id that ever
+ * came round again would silently inherit a dead name and a star nobody set.
+ * Called from removeDriveFromList, the one place a row actually goes away.
+ */
+function forgetLocalDriveState(id) {
+    if (!id) return;
+    let changed = false;
+    if (aliases().delete(id)) { saveAliases(); changed = true; }
+    if (favorites().delete(id)) { saveFavorites(); changed = true; }
+    if (changed) log('Cleared local state for removed drive:', id);
 }
 
 // ============================================================================
@@ -1613,7 +2143,11 @@ function bindIPC() {
                 speed: speed
             });
         } else {
-            // This is an upload (someone downloading from us)
+            // This is an upload (someone downloading from us).
+            // A peer pulling bytes is proof of reachability stronger than any
+            // announce signal, so settle the initiating state here too — a
+            // share actively serving must never read "Initiating".
+            markAnnounced(driveId);
             const speed = parseSpeed(speedFormatted);
             item.update({ 
                 status: 'sharing',
@@ -1651,14 +2185,64 @@ function bindIPC() {
         }
     });
     
+/**
+ * What a failed resume should look like on the card.
+ *
+ * Two very different failures arrive on the same channel:
+ *   "Storage directory missing" -> the drive's data is GONE. It can never
+ *       announce or serve. The card must say so.
+ *   "File descriptor could not be locked" -> another process holds the
+ *       corestore. Transient, retried next boot — calling that dead is wrong.
+ *
+ * Shared by the live 'drive-resume-failed' event and the boot-time
+ * `resumeErrors` snapshot, so the two can never disagree.
+ */
+function statusForResumeError(reason, isDownload) {
+    const dataGone = /storage directory missing|no such file|ENOENT/i
+        .test(String(reason || ''));
+    if (!dataGone) return 'inactive';
+    // The Corestore folder is gone. For a SHARE that is terminal: the key
+    // lived there, so the link is dead for good — say "Share lost".
+    //
+    // For a DOWNLOAD it is far less dramatic. The received files live in
+    // ~/peardrop/downloads, not in the Corestore, so they are very likely
+    // still there and still openable; all that is lost is the ability to
+    // seed them back. 'inactive' says "not running" without claiming
+    // anything about the files.
+    return isDownload ? 'inactive' : 'lost';
+}
+
     // Drives updated (from HyperdriveManager)
     window.electronAPI.onDrivesUpdated?.((event, data) => {
         if (data.action === 'loaded') {
             // Complete drives list loaded (e.g., after migration or startup)
             console.log('[PearDrop] Drives loaded, refreshing list:', data.drives?.length || 0);
+            // Announces that landed before this window attached its listener.
+            // Seed them first so normalizeDrive resolves those cards straight
+            // to 'sharing' instead of a "Initiating" flash.
+            if (Array.isArray(data.announced)) {
+                for (const id of data.announced) announcedDrives.add(id);
+            }
+            // Drives that failed to resume during init. main has always sent
+            // this snapshot and the renderer has never read it — the live
+            // 'drive-resume-failed' event fires DURING init, before this
+            // payload exists, so its `if (!existing) return` guard dropped
+            // every one of them. The result: a drive whose files are gone
+            // came back looking healthy, then sat on "Initiating" for five
+            // minutes and finally claimed "Not reachable" — which blamed the
+            // network for a missing folder.
+            const resumeErrors = data.resumeErrors || {};
             if (data.drives) {
                 for (const drive of data.drives) {
                     const normalized = normalizeDrive(drive);
+                    // Applied BEFORE the card mounts, so a dead drive never
+                    // shows as Initiating and never arms the announce
+                    // watchdog.
+                    const failed = resumeErrors[normalized.id];
+                    if (failed) {
+                        normalized.status = statusForResumeError(
+                            failed.error, normalized.type === 'download');
+                    }
                     if (driveItems.has(normalized.id)) {
                         updateDriveInList(normalized);
                     } else {
@@ -1671,6 +2255,7 @@ function bindIPC() {
                 // second pass once things are quiet actually sticks — this
                 // is what a manual refresh was doing by hand.
                 scheduleThumbnailRetry();
+                reconcileMissingFiles();
             }
         } else if (data.action === 'removed' && data.id) {
             // The row is going away, so stop suppressing its progress events.
@@ -1732,9 +2317,24 @@ function bindIPC() {
         if (!data || !data.driveId) return;
         console.log('[PearDrop] drive-resume-failed:', data.driveId, data.error);
         const existing = drives.find(d => d.id === data.driveId);
-        if (existing) {
-            updateDriveInList({ id: data.driveId, status: 'inactive' });
-        }
+        if (!existing) return;
+
+        // Not all resume failures mean the same thing, and showing them
+        // identically hid the one the user can actually act on:
+        //
+        //   "Storage directory missing"  -> the drive's data is GONE. It can
+        //       never resume. The row is a tombstone; the honest thing is to
+        //       say so and let the user remove it.
+        //
+        //   "File descriptor could not be locked" -> another process holds
+        //       the corestore (a CLI share, a second window, a copy still
+        //       shutting down). Transient, retried next boot — calling that
+        //       dead would be wrong.
+        clearInitiatingWatchdog(data.driveId);
+        updateDriveInList({
+            id: data.driveId,
+            status: statusForResumeError(data.error, existing.type === 'download')
+        });
     });
 
     // Resumed drive ready to continue download (new in unified engine 0.24.0)
@@ -1748,10 +2348,46 @@ function bindIPC() {
         const driveId = data && data.driveId;
         if (!driveId || cancellingDrives.has(driveId)) return;
         const drive = drives.find(d => d.id === driveId);
-        if (!drive || drive.status !== 'downloading') return;
+        if (!drive) return;
 
-        updateDriveInList({ id: driveId, status: 'connecting', speed: 0 });
-        showDroppedOverlay(driveId, drive);
+        // Read the LIVE status off the drive-item, never the `drives` array.
+        // Progress updates call item.update() directly and never write back to
+        // the array — progress calls item.update() directly.
+        // So the first drop set the array to 'connecting' and NOTHING ever set
+        // it back to 'downloading': the Resume button calls handleDownload
+        // directly, and every progress event after that only touches the item.
+        // This guard then rejected the second and third disconnect, which is
+        // why the overlay appeared exactly once per download and never again.
+        const live = driveItems.get(driveId)?.getData?.();
+        const status = (live && live.status) || drive.status;
+
+        // 'connecting' counts too: a drop while reconnecting is still a drop.
+        // 'interrupted' is excluded so a second disconnect on an already
+        // parked card is a no-op rather than a redundant re-render.
+        if (status !== 'downloading' && status !== 'connecting') return;
+
+        // Plain status change — no overlay. The card keeps its thumbnail,
+        // name and size, and simply reads "Disconnected at N%" with Resume
+        // and cancel on the row. Speed is zeroed because nothing is moving.
+        updateDriveInList({ id: driveId, status: 'interrupted', speed: 0 });
+    });
+
+    // Share became reachable on the DHT.
+    window.electronAPI.onDriveAnnounced?.((event, data) => {
+        if (data && data.driveId) markAnnounced(data.driveId);
+    });
+
+    // The announce itself failed — no point waiting out the watchdog.
+    window.electronAPI.onDriveAnnounceFailed?.((event, data) => {
+        const driveId = data && data.driveId;
+        if (!driveId) return;
+        announcedDrives.delete(driveId);
+        clearInitiatingWatchdog(driveId);
+        const cur = driveItems.get(driveId)?.getData?.()?.status
+            || drives.find(d => d.id === driveId)?.status;
+        if (cur === 'initiating' || cur === 'sharing') {
+            updateDriveInList({ id: driveId, status: 'unreachable' });
+        }
     });
 
     window.electronAPI.onDriveReadyToDownload?.((event, data) => {
@@ -1759,21 +2395,23 @@ function bindIPC() {
         const { driveId, shareLink, shareName } = data;
         console.log('[PearDrop] drive-ready-to-download:', driveId);
 
-        // Two ways to arrive here, and they deserve different treatment:
+        // ONE question decides this: did the user ask for this transfer in
+        // this session? If so, a reconnect continues it. If not — a drive the
+        // engine resumed at boot — it parks and asks, because silently
+        // pulling gigabytes because the app happened to open is not the app's
+        // call to make.
         //
-        //  (a) The peer returned during THIS session, while the user was
-        //      looking at a "Connection lost" prompt. They already made no
-        //      choice, and the transfer was theirs a moment ago — continue,
-        //      and take the now-moot prompt away.
+        // There used to be a second condition here, `parked`, meaning "this
+        // card is showing the interrupted state, so the peer returning should
+        // resume it". That was written when only a mid-session drop could put
+        // a card in that state. It is now also the state a RESTORED download
+        // loads in, so `parked` was true for exactly the drives that must not
+        // auto-start, and every restored download resumed itself on launch —
+        // landing on "Downloading" and staying there when the sender was gone.
         //
-        //  (b) The app just started and the engine resumed a drive left in
-        //      'seeking' from a previous run. Silently pulling gigabytes the
-        //      moment someone opens the app is not the app's call to make —
-        //      especially when a drop mid-session politely asks first. Park
-        //      it and ask, so both routes behave the same way.
-        const hadPrompt = !!(scrollList?._slots?.get(driveId)?.slot
-            ?.querySelector('.drive-dropped-overlay'));
-        const isStartupResume = (Date.now() - APP_START_AT) < STARTUP_RESUME_WINDOW_MS;
+        // It is redundant as well as harmful: a mid-session drop was
+        // user-initiated by definition, so its id is already in the set below.
+        const userAsked = userStartedDownloads.has(driveId);
 
         // Only write the title when the engine actually supplied one.
         // `shareName || 'Download'` overwrote a card that already showed the
@@ -1783,21 +2421,22 @@ function bindIPC() {
         // in-place patch, making it the most expensive kind of no-op.
         const update = {
             id: driveId,
-            status: hadPrompt || !isStartupResume ? 'downloading' : 'connecting'
+            status: userAsked ? 'downloading' : 'interrupted'
         };
-        if (shareName) update.title = shareName;
+        // Through displayTitle so a resumed drive whose stored name is the old
+        // "N files" doesn't reintroduce it after the list has been normalised.
+        if (shareName) {
+            const known = drives.find(d => d.id === driveId);
+            update.title = displayTitle(shareName, known?.fileCount || 1, driveId);
+            update.originalTitle = baseTitle(shareName, known?.fileCount || 1);
+        }
         updateDriveInList(update);
 
-        if (isStartupResume && !hadPrompt) {
-            const drive = drives.find(d => d.id === driveId) || { id: driveId, shareLink };
-            showDroppedOverlay(driveId, drive, {
-                title: 'Unfinished download',
-                sub: 'Continue where it left off?'
-            });
-            return;
-        }
+        // Nobody asked for this one. The status set above already reads
+        // "Disconnected" with Resume on the row, so there is nothing more to
+        // do until they press it.
+        if (!userAsked) return;
 
-        clearDroppedOverlay(driveId);
         if (typeof handleDownload === 'function') {
             handleDownload(driveId, shareLink);
         }
@@ -2589,7 +3228,7 @@ async function pauseAllTransfers() {
         try {
             const result = await window.electronAPI.drivesPause?.(drive.id);
             if (result?.success) {
-                updateDriveInList({ id: drive.id, status: 'paused' });
+                updateDriveInList({ id: drive.id, status: 'inactive' });
                 paused++;
             }
         } catch (err) {
@@ -2597,14 +3236,16 @@ async function pauseAllTransfers() {
         }
     }
     
-    showToast(`Paused ${paused} transfer${paused !== 1 ? 's' : ''}`, 'success');
+    showToast(`Stopped ${paused} transfer${paused !== 1 ? 's' : ''}`, 'success');
 }
 
 async function resumeAllTransfers() {
-    const pausedDrives = drives.filter(d => d.status === 'paused');
+    // Was filtering on 'paused', a status the UI no longer produces, so
+    // Resume All silently found nothing.
+    const pausedDrives = drives.filter(d => d.status === 'inactive');
     
     if (pausedDrives.length === 0) {
-        showToast('No paused transfers to resume', 'info');
+        showToast('No inactive transfers to resume', 'info');
         return;
     }
     
@@ -2638,11 +3279,11 @@ async function clearCompletedTransfers() {
         if (d.type === 'share' && d.status === 'sharing' && d.peers > 0) {
             return true; // Include but will warn
         }
-        // Everything else: complete, inactive, error, paused, disconnected
+        // Everything else: complete, inactive, error, disconnected
         return d.status === 'complete' || 
                d.status === 'sharing' || 
                d.status === 'error' ||
-               d.status === 'paused' ||
+               d.status === 'inactive' ||
                (d.type === 'download' && d.progress >= 1) ||
                (d.type === 'share' && (!d.peers || d.peers === 0));
     });
@@ -2736,7 +3377,7 @@ const STATUS_PRIORITY = {
     'connecting': 2,
     'sharing': 3,
     'complete': 4,
-    'paused': 5,
+    'inactive': 5,
     'error': 6
 };
 
@@ -2848,109 +3489,6 @@ function bindScrollListEvents() {
     });
 }
 
-/**
- * "Connection lost" overlay for an interrupted download.
- *
- * Resuming is the user's call, not the app's: continuing costs bandwidth and
- * they may no longer want the file. So the transfer parks here until they
- * choose. Same glass treatment as the delete/cancel overlays.
- */
-function showDroppedOverlay(driveId, drive, copy) {
-    const slotData = scrollList && scrollList._slots && scrollList._slots.get(driveId);
-    if (!slotData || !slotData.slot) return;
-    const slot = slotData.slot;
-    if (slot.querySelector('.drive-dropped-overlay')) return;   // already shown
-
-    // Read progress from the drive-item itself, not the `drives` array.
-    // Progress updates call item.update() directly and never go through
-    // updateDriveInList(), so the array's copy stays at whatever it was
-    // created with — which is why this always read "Stopped at 0%".
-    const live = driveItems.get(driveId)?.getData?.();
-    const rawPct = (live && live.progress != null) ? live.progress
-                 : (drive && drive.progress != null ? drive.progress : null);
-    const pct = rawPct != null ? Math.round(rawPct * 100) : null;
-    slot.classList.add('is-dropped');
-
-    const overlay = document.createElement('div');
-    overlay.className = 'drive-dropped-overlay';
-    const title = (copy && copy.title) || 'Connection lost';
-    const sub = (copy && copy.sub)
-        // Only mention a figure when there is real progress to report.
-        // "Stopped at 0%" tells the user nothing they can act on.
-        || `${pct ? `Stopped at ${pct}% · ` : ''}the sender went offline`;
-    overlay.innerHTML =
-        `<div class="drive-dropped-text">${window.PearUtils.escapeHtml(title)}</div>` +
-        `<div class="drive-dropped-sub">${window.PearUtils.escapeHtml(sub)}</div>` +
-        '<div class="drive-dropped-actions">' +
-            '<button type="button" class="drive-dropped-btn resume">Resume</button>' +
-            '<button type="button" class="drive-dropped-btn cancel">Cancel</button>' +
-        '</div>';
-    slot.appendChild(overlay);
-
-    overlay.querySelector('.resume').addEventListener('click', () => {
-        const link = drive.shareLink || drives.find(d => d.id === driveId)?.shareLink;
-        if (!link) {
-            showToast('No share link for this download', 'error');
-            return;
-        }
-
-        // Deliberately NOT pre-checking whether the peer is back. There is no
-        // IPC for that, and inventing one would be guesswork: rejoining the
-        // swarm and waiting IS how you find out. What was actually wrong was
-        // the silence — the overlay vanished and the card sat frozen for up
-        // to 60s per file. So say what is happening, and let the existing
-        // failure path (stall watchdog -> error status + toast) speak if the
-        // sender never returns.
-        clearDroppedOverlay(driveId);
-        updateDriveInList({ id: driveId, status: 'connecting', speed: 0 });
-        showToast('Reconnecting to sender…');
-        if (typeof handleDownload === 'function') handleDownload(driveId, link);
-    });
-
-    overlay.querySelector('.cancel').addEventListener('click', async () => {
-        // Order matters: drop this overlay before showing the cancelling one,
-        // or both sit on the slot at once and the row is double-dimmed.
-        clearDroppedOverlay(driveId);
-        if (cancellingDrives.has(driveId)) return;   // already cancelling
-        cancellingDrives.add(driveId);
-        showCancellingOverlay(driveId);
-        try {
-            // main is the single owner of the teardown here — it stops the
-            // loop, deletes partials and removes the entry. Calling remove
-            // from the renderer as well is what raced the writer before.
-            await window.electronAPI.hyperdriveDownloadCancel?.(driveId);
-            showToast('Download cancelled');
-        } catch (err) {
-            cancellingDrives.delete(driveId);
-            clearCancellingOverlay(driveId);
-            showToast('Cancel failed: ' + (err.message || 'unknown'), 'error');
-        }
-    });
-}
-
-function clearDroppedOverlay(driveId) {
-    const slotData = scrollList && scrollList._slots && scrollList._slots.get(driveId);
-    if (!slotData || !slotData.slot) return;
-    slotData.slot.classList.remove('is-dropped');
-    const overlay = slotData.slot.querySelector('.drive-dropped-overlay');
-    if (overlay) overlay.remove();
-}
-
-// Safety net for EDGE 7: `.is-dropped` dims the row to 45%, and it is only
-// meaningful while the overlay is present. If the overlay were ever removed
-// by another route (a re-render, a slot rebuild), the card would stay greyed
-// with nothing on it explaining why. Reconcile the two on every drive update.
-function reconcileDroppedOverlays() {
-    if (!scrollList || !scrollList._slots) return;
-    for (const [, slotData] of scrollList._slots) {
-        const slot = slotData && slotData.slot;
-        if (!slot || !slot.classList.contains('is-dropped')) continue;
-        if (!slot.querySelector('.drive-dropped-overlay')) {
-            slot.classList.remove('is-dropped');
-        }
-    }
-}
-
 // ─── Peer connection ledger ─────────────────────────────────────────────
 // Per-drive record of who we are (or were) connected to, for the File Info
 // panel. Kept in the renderer only: it is presentation state, and the
@@ -2978,11 +3516,6 @@ function recordPeerConnection(driveId, data, connected) {
         rec.lastEndedAt = at;
     }
 }
-
-// Anything the engine resumes within this window of launch is treated as a
-// leftover from a previous run rather than a live reconnection.
-const APP_START_AT = Date.now();
-const STARTUP_RESUME_WINDOW_MS = 20000;
 
 // Drives the user has cancelled. Progress events for these are dropped so
 // the bar and percentage freeze the instant Cancel is pressed, instead of
@@ -3373,7 +3906,6 @@ setActivePage('allshares');
         if (s === 'sharing' || s === 'seeding') return 'Sharing';
         if (s === 'downloading') return 'Downloading';
         if (s === 'complete' || s === 'completed' || s === 'downloaded') return 'Completed';
-        if (s === 'paused') return 'Paused';
         if (s === 'error' || s === 'failed') return 'Failed';
         if (s === 'inactive') return 'Inactive';
         return 'Active';
@@ -3838,7 +4370,6 @@ setActivePage('allshares');
             case 'sharing':     return 'Sharing';
             case 'downloading': return 'Downloading';
             case 'complete':    return 'Complete';
-            case 'paused':      return 'Paused';
             case 'error':       return 'Error';
             case 'inactive':    return 'Inactive';
             case 'connecting':  return 'Connecting';
@@ -4095,7 +4626,117 @@ function log(...args) {
  *   peardrop.setDebug(true) — Enable logging
  *   peardrop.setDebug(false) — Disable logging
  */
+// ─── Demo cards (DevTools only) ─────────────────────────────────────────
+// Fake rows for working on card UI without moving real data. They exist
+// ONLY in the renderer's list: no drive is created, no manifest entry is
+// written, nothing touches the network or the disk. Reloading clears them.
+//
+//   peardrop.demo()               downloading card, progress climbing
+//   peardrop.demo('inactive')     interrupted download, Resume pill
+//   peardrop.demo('missing')      Files removed
+//   peardrop.demo('sharing')      active share
+//   peardrop.demo('folder')       multi-file downloading card
+//   peardrop.demo('interrupted')  stopped at 42% — red "Interrupted" label
+//                                 with Resume + cancel-X on the row
+//                                 ('dropped' is kept as an alias)
+//   peardrop.demoClear()          remove every demo row
+const _demoTimers = new Map();
+
+function _demoAdd(kind = 'downloading') {
+    const id = `demo_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const isFolder = kind === 'folder';
+    const base = {
+        id,
+        // Explicit flag rather than sniffing the id prefix — the itemFactory
+        // reads it to suppress the context menu entirely.
+        isDemo: true,
+        title: isFolder ? 'Folder' : 'Demo.File.2026.1080p.WEBRip.x264.mkv',
+        size: 3_130_049_295,
+        fileCount: isFolder ? 3 : 1,
+        files: isFolder
+            ? [{ name: 'alpha.bin', size: 3e6 }, { name: 'beta.bin', size: 2e6 }, { name: 'gamma.bin', size: 1e6 }]
+            : [{ name: 'Demo.File.2026.1080p.WEBRip.x264.mkv', size: 3_130_049_295 }],
+        type: kind === 'sharing' ? 'share' : 'download',
+        shareLink: 'peardrop://' + 'd'.repeat(64),
+        peers: kind === 'sharing' ? 1 : 0,
+        progress: 0,
+        speed: 0,
+        status: 'downloading'
+    };
+
+    if (kind === 'inactive' || kind === 'missing' || kind === 'sharing') {
+        base.status = kind === 'sharing' ? 'sharing' : kind;
+        base.progress = kind === 'sharing' ? 1 : 0.37;
+        addDriveToList(base, { animate: true });
+        console.log(`[demo] added ${kind} card:`, id);
+        return id;
+    }
+
+    // Interrupted download: the card parks at a part-done percentage with the
+    // "Connection lost" overlay on it, so the Resume/Cancel prompt can be
+    // looked at without waiting for a real sender to drop.
+    if (kind === 'dropped' || kind === 'interrupted') {
+        // No overlay. The interrupted state is an ordinary card status now:
+        // normal thumbnail, title and meta, a red "Interrupted" label where
+        // the green "Active" would be, and Resume + cancel-X on the row.
+        base.status = 'interrupted';
+        base.progress = 0.42;
+        base.speed = 0;
+        addDriveToList(base, { animate: true });
+        console.log('[demo] added interrupted card:', id);
+        return id;
+    }
+
+    // Downloading: animate so the bar, percentage, rate and the 1/sec
+    // throttle can all be seen behaving.
+    addDriveToList(base, { animate: true });
+    _demoRunProgress(id);
+    console.log(`[demo] added downloading card:`, id, '(call peardrop.demoClear() to remove)');
+    return id;
+}
+
+/**
+ * Drive a demo card's progress bar from wherever it currently is up to 100%.
+ * Split out of _demoAdd so the dropped card's Resume button can restart it.
+ */
+function _demoRunProgress(id) {
+    const existing = _demoTimers.get(id);
+    if (existing) clearInterval(existing);
+
+    const current = drives.find(d => d.id === id);
+    let pct = Math.round(((current && current.progress) || 0) * 100);
+
+    const timer = setInterval(() => {
+        pct += 1 + Math.random() * 2;
+        if (pct >= 100) {
+            clearInterval(timer);
+            _demoTimers.delete(id);
+            updateDriveInList({ id, status: 'sharing', progress: 1, speed: 0 });
+            return;
+        }
+        updateDriveInList({
+            id,
+            status: 'downloading',
+            progress: pct / 100,
+            speed: (20 + Math.random() * 25) * 1024 * 1024
+        });
+    }, 400);
+    _demoTimers.set(id, timer);
+}
+
+function _demoClear() {
+    for (const [id, t] of _demoTimers) { clearInterval(t); }
+    _demoTimers.clear();
+    const ids = drives.filter(d => String(d.id).startsWith('demo_')).map(d => d.id);
+    ids.forEach(id => removeDriveFromList(id));
+    console.log(`[demo] removed ${ids.length} demo card(s)`);
+}
+
 window.peardrop = {
+    // Demo cards for UI work — see the note above.
+    demo: _demoAdd,
+    demoClear: _demoClear,
+
     // Check debug state
     debug: () => {
         console.log(`Debug logging is ${DEBUG ? 'ENABLED' : 'DISABLED'}`);
@@ -4205,6 +4846,37 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
         overlay.classList.add('active');
         gridEl.scrollTop = 0;
         loadFolderThumbs();
+        markMissingFolderFiles();
+    }
+
+    /**
+     * Mark files that are no longer on disk.
+     *
+     * A share keeps its own copy of the data, so a file deleted from the
+     * user's folder still transfers fine — but Open cannot work, and the OS
+     * answers a missing path with its own "Windows cannot find…" dialog.
+     * Checking up front turns that into a plain red line in the row.
+     */
+    async function markMissingFolderFiles() {
+        const paths = currentFiles.map(f => f && f.path).filter(Boolean);
+        if (!paths.length || !window.electronAPI?.filesExist) return;
+        let exists;
+        try { exists = await window.electronAPI.filesExist(paths); }
+        catch (_) { return; }
+
+        currentFiles.forEach((f, i) => {
+            if (!f || !f.path || exists[f.path] !== false) return;
+            const row = gridEl.querySelector(`.folder-file[data-file-index="${i}"]`);
+            if (!row) return;
+            row.classList.add('is-missing');
+            const meta = row.querySelector('.folder-file-meta');
+            if (meta) meta.textContent = 'File removed';
+            const btn = row.querySelector('.folder-file-open');
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = 'Removed';
+            }
+        });
     }
 
     function closeFolderModal() {
@@ -4275,6 +4947,115 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
     window.closeFolderModal = closeFolderModal;
 })();
 
+// ─── Rename Modal (3-dot menu -> "Rename") ──────────────────────────
+// Sets a LOCAL alias for a card. Never renames a file, never reaches a
+// peer, never writes drives-state.json — see the alias store above for
+// why, and for the beta trade-off.
+//
+// Applies to shares and downloads alike: the card is the same object in
+// both tabs, so the rename is too.
+(function () {
+    const overlay  = document.getElementById('renameModalOverlay');
+    if (!overlay) return;
+    const inputEl  = document.getElementById('renameInput');
+    const hintEl   = document.getElementById('renameHint');
+    const resetBtn = document.getElementById('renameResetBtn');
+    const cancelBtn = document.getElementById('renameCancelBtn');
+    const saveBtn  = document.getElementById('renameSaveBtn');
+
+    let currentId = null;
+    let currentOriginal = '';
+
+    function openRenameModal(drive) {
+        if (!drive || !drive.id) return;
+        currentId = drive.id;
+
+        // The un-aliased name. Prefer the field normalizeDrive computed; fall
+        // back for a card built by a path that predates it. Never read
+        // `drive.title` when an alias is set — that IS the alias, and using it
+        // would make the alias its own "original" on the second open.
+        currentOriginal = drive.originalTitle
+            || (getAlias(currentId) ? '' : drive.title)
+            || '';
+
+        const alias = getAlias(currentId);
+        inputEl.value = alias || '';
+        inputEl.placeholder = currentOriginal || 'Name';
+        // "Original name: Folder" tells the user nothing — every multi-file
+        // share carries the same placeholder, so the line is pure noise on
+        // exactly the cards people are most likely to rename. Show it only
+        // when there is a real name underneath. Reset is unaffected: it still
+        // appears whenever an alias exists, and still restores "Folder".
+        const hasRealOriginal = currentOriginal && currentOriginal !== FOLDER_PLACEHOLDER;
+        hintEl.innerHTML = hasRealOriginal
+            ? `Original name: <span class="rename-orig">${window.PearUtils.escapeHtml(currentOriginal)}</span>`
+            : '';
+        resetBtn.hidden = !alias;
+
+        overlay.classList.add('active');
+        // Focus after the opening fade so the caret doesn't render mid-animation.
+        setTimeout(() => { inputEl.focus(); inputEl.select(); }, 60);
+    }
+
+    function closeRenameModal() {
+        overlay.classList.remove('active');
+        currentId = null;
+    }
+
+    // One path in and out: an empty field clears the alias, which is also
+    // exactly what Reset does. No separate "remove alias" state to keep
+    // in sync, and no way to save a blank name.
+    function commit(value) {
+        if (!currentId) return closeRenameModal();
+        const id = currentId;
+        const before = getAlias(id);
+
+        // Reset needs the name to put back. If we somehow don't have it,
+        // do NOTHING rather than invent one: this used to fall back to the
+        // string 'Unknown', so a failed reset would RENAME the card to
+        // "Unknown" — a wrong answer that looks like a right one, with the
+        // real name now gone from the screen. Refusing is recoverable;
+        // a confident wrong name is not.
+        const stored = drives.find(d => d.id === id);
+        const original = (stored && stored.originalTitle) || currentOriginal;
+        // Checked BEFORE setAlias — bailing out after it would have already
+        // cleared the stored alias, leaving the card named after something
+        // we just decided we couldn't restore.
+        const willClear = !String(value == null ? '' : value).trim();
+        if (willClear && !original) {
+            closeRenameModal();
+            showToast('Could not restore the original name', 'error');
+            return;
+        }
+
+        const alias = setAlias(id, value);
+        updateDriveInList({ id, title: alias || original, alias });
+        closeRenameModal();
+
+        // Saying "Renamed" when nothing changed teaches the user to distrust
+        // the toast. Silence is the honest response to a no-op.
+        if (alias === before) return;
+        showToast(alias ? 'Renamed' : 'Name reset');
+    }
+
+    saveBtn.addEventListener('click', () => commit(inputEl.value));
+    resetBtn.addEventListener('click', () => commit(''));
+    cancelBtn.addEventListener('click', closeRenameModal);
+
+    inputEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); commit(inputEl.value); }
+    });
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) closeRenameModal();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && overlay.classList.contains('active')) closeRenameModal();
+    });
+
+    window.openRenameModal  = openRenameModal;
+    window.closeRenameModal = closeRenameModal;
+})();
+
 // ─── Share Build Progress (Send modal State C + background pill) ────
 // Bridges the 'share-progress' IPC event (emitted per file by
 // createDrive) to two surfaces:
@@ -4286,11 +5067,36 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
     const modalInner   = modalOverlay?.querySelector('.send-modal');
     const fileEl       = document.getElementById('sendProgressFile');
     const barEl        = document.getElementById('sendProgressBar');
-    const bytesEl      = document.getElementById('sendProgressBytes');
     const percentEl    = document.getElementById('sendProgressPercent');
     const ringEl       = document.getElementById('sendProgressRing');
-    const filesEl      = document.getElementById('sendProgressFiles');
-    const filesLabelEl = document.getElementById('sendProgressFilesLabel');
+    const statsEl      = document.getElementById('sendProgressStats');
+
+    // Stat blocks are built once per share, then only their values are
+    // written. Rebuilding the markup on every progress event would throw
+    // away the tick animation and churn the DOM many times a second.
+    let statRefs = {};
+
+    function buildStats(isGroup) {
+        if (!statsEl) return;
+        const block = (key, label) =>
+            `<div class="send-progress-stat">
+                <div class="send-progress-stat-label">${label}</div>
+                <div class="send-progress-stat-value send-progress-num" data-stat="${key}">—</div>
+            </div>`;
+        const divider = '<div class="send-progress-stat-div" aria-hidden="true"></div>';
+
+        // "1 file" tells the user nothing, so a single file drops that block.
+        const parts = isGroup
+            ? [block('files', 'Files'), divider, block('size', 'Size'), divider, block('eta', 'Time left')]
+            : [block('size', 'Size'), divider, block('eta', 'Time left')];
+
+        statsEl.innerHTML = parts.join('');
+        statRefs = {
+            files: statsEl.querySelector('[data-stat="files"]'),
+            size:  statsEl.querySelector('[data-stat="size"]'),
+            eta:   statsEl.querySelector('[data-stat="eta"]')
+        };
+    }
 
     const RING_C = 326.7;   // 2 * pi * r(52), matches the CSS dasharray
 
@@ -4364,22 +5170,19 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
         if (ringEl) ringEl.style.strokeDashoffset = String(RING_C * (1 - pct / 100));
         setNum(percentEl, String(pct));
         setNum(pillPercent, pct + '%');
-        // "0/1" tells you nothing on a single big file — show how long is
-        // left instead. Multi-file shares keep the count, which is the more
-        // useful signal there.
-        if (last.filesTotal === 1) {
-            if (filesLabelEl) filesLabelEl.textContent = 'Time left';
-            setNum(filesEl, etaText());
-        } else {
-            if (filesLabelEl) filesLabelEl.textContent = 'Files';
-            setNum(filesEl, last.filesTotal
+        // Time left is shown for EVERY share, group or single. It used to be
+        // swapped out for the file count on a group, which is backwards: a
+        // 500-file transfer is exactly when you want to know how long.
+        setNum(statRefs.eta, etaText());
+        if (statRefs.files) {
+            setNum(statRefs.files, last.filesTotal
                 ? `${last.filesDone}/${last.filesTotal}`
                 : String(last.filesDone));
         }
         // Size gets its own stat block now, so it's just the value.
         // bytesDone is always real (createDrive stats every file), so show
         // it even when the total is unknown.
-        setNum(bytesEl, bytesTotal > 0
+        setNum(statRefs.size, bytesTotal > 0
             ? `${fmt(last.bytesDone)} / ${fmt(bytesTotal)}`
             : fmt(last.bytesDone));
     }
@@ -4396,6 +5199,7 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
             cancelBtn.disabled = false;
             cancelBtn.textContent = 'Cancel';
         }
+        buildStats(last.filesTotal > 1);
         if (fileEl) fileEl.textContent = 'Starting…';
         render();
         syncSurfaces();
