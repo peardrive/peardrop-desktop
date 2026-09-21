@@ -1,7 +1,7 @@
 /**
  * MODULE: preload.js
  * PURPOSE: Secure IPC bridge between renderer and main process
- * VERSION: 0.19.1
+ * VERSION: 0.27.0
  * EXPORTS (via window.electronAPI):
  *   INVOKE (renderer -> main):
  *     Hyperdrive:
@@ -39,6 +39,12 @@
  * onDownloadPeerDisconnected(cb) - Sender went offline
  * onDriveReadyToDownload(cb) - Resumed drive ready to continue download
  * onDrivesUpdated(cb) - Drive added/removed/updated
+ * onDriveResumeFailed(cb) - A drive could not be resumed
+ * onDriveAnnounced(cb) - Share announced on the DHT (now reachable)
+ * onDriveAnnounceFailed(cb) - DHT announce failed for a share
+ *   Diagnostics:
+ * filesExist(paths) - Which of these paths are still on disk
+ * getLogPath() / revealLog() / readLogTail(n) - redacted log file
  * EXTERNAL CALLS: Electron contextBridge, ipcRenderer
  */
 const { contextBridge, ipcRenderer } = require('electron');

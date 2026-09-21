@@ -249,6 +249,46 @@
         #listContainer.view-receive .scroll-list-slot[data-type="share"]:not([data-demo]) {
             display: none;
         }
+        /* Search — same CSS-only mechanism as the tab filters, so a query
+           composes with whichever tab is active instead of fighting it.
+           renderer.js sets data-match="false" on rows that miss; nothing is
+           re-rendered and no DOM is thrown away, so scroll position and
+           in-flight progress bars survive typing.
+           Demo rows are exempt, as with every other filter. */
+        #listContainer.is-searching .scroll-list-slot[data-match="false"]:not([data-demo]) {
+            display: none;
+        }
+
+        /* No hits. Same :has() approach as the favorites empty state: CSS
+           answers "are there any visible rows?" with no JS bookkeeping. */
+        .search-empty { display: none; }
+        #listContainer.is-searching:not(:has(.scroll-list-slot[data-match="true"])) .search-empty {
+            display: flex;
+            position: absolute;
+            inset: 0;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            text-align: center;
+            padding: 28px 20px;
+            pointer-events: none;
+        }
+        .search-empty-title {
+            font-size: 17px;
+            font-weight: 700;
+            color: rgba(255, 255, 255, 0.82);
+        }
+        .search-empty-text {
+            font-size: 13.5px;
+            color: rgba(255, 255, 255, 0.45);
+            max-width: 44ch;
+        }
+        .search-empty-term {
+            color: #eab308;
+            font-weight: 700;
+        }
+
         /* Favorites tab — hide everything that isn't starred. Same CSS-only
            approach as the view-share / view-receive filters above, so
            switching tabs costs no re-render. */
@@ -1154,6 +1194,11 @@
                 color: rgba(255, 255, 255, 0.4);
                 min-height: 17px;   /* reserve the line so Save never jumps */
             }
+            /* Nothing to say and nothing to press: collapse entirely rather
+               than leaving a reserved line of dead space under the input. */
+            .rename-hint.is-empty {
+                display: none;
+            }
             .rename-hint-orig {
                 overflow: hidden;
                 text-overflow: ellipsis;
@@ -1868,6 +1913,31 @@
             .receive-paste-btn:active {
                 filter: brightness(0.95);
             }
+            /* Download keeps the green — same affordance, the label carries
+               the difference. Clear must NOT look like the go-button: it
+               throws away what you just pasted. */
+            .receive-paste-btn.is-clear {
+                background: transparent;
+                border: 2px solid rgba(255, 100, 100, 0.6);
+                color: rgba(255, 140, 140, 0.95);
+            }
+            /* Neutral, not green: the useful action for a link you already
+               have is to go look at it, not to fetch it again. */
+            .receive-paste-btn.is-existing {
+                background: rgba(255, 255, 255, 0.10);
+                border: 2px solid rgba(255, 255, 255, 0.22);
+                color: rgba(255, 255, 255, 0.92);
+                white-space: nowrap;
+            }
+            .receive-paste-btn.is-existing:hover {
+                filter: none;
+                background: rgba(255, 255, 255, 0.16);
+            }
+            .receive-paste-btn.is-clear:hover {
+                filter: none;
+                background: rgba(255, 100, 100, 0.12);
+                border-color: rgba(255, 100, 100, 0.85);
+            }
             .receive-link-hint {
                 display: none;
                 margin: 8px 2px 0;
@@ -1882,6 +1952,12 @@
             .receive-link-hint.is-invalid {
                 display: block;
                 color: #ef4a5f;
+            }
+            /* Amber: the link is perfectly good, it is just already yours.
+               Red would read as "you did something wrong". */
+            .receive-link-hint.is-warn {
+                display: block;
+                color: #eab308;
             }
 
             .receive-or-divider {
@@ -2449,17 +2525,114 @@
                rule; only INTERNAL layout lives here.
                ============================================================ */
             .folder-modal {
-                padding: 22px 28px 24px;
+                padding: 18px 28px 24px;
                 display: flex;
                 flex-direction: column;
-                gap: 18px;
+                gap: 14px;
+            }
+            /* Close on its own line, right-aligned (Figma). */
+            .folder-modal-topbar {
+                display: flex;
+                justify-content: flex-end;
             }
             .folder-modal-header {
                 display: flex;
-                align-items: flex-start;
+                /* Centre, not flex-start: the Copy Link pill should sit
+                   against the middle of the icon+title block rather than
+                   ride up to the first text line. */
+                align-items: center;
                 justify-content: space-between;
                 gap: 16px;
             }
+            /* Green pill, same family as the row-action Open button but
+               filled — this is the modal's primary action. */
+            .folder-modal-copy {
+                flex-shrink: 0;
+                height: 44px;
+                padding: 0 26px;
+                border: none;
+                border-radius: 12px;
+                background: linear-gradient(180deg, #b8de4a 0%, #9cc22f 100%);
+                color: #0d1400;
+                font-family: inherit;
+                font-size: 15px;
+                font-weight: 700;
+                letter-spacing: -0.1px;
+                cursor: pointer;
+                transition: filter 0.15s ease, transform 0.1s ease;
+            }
+            .folder-modal-copy:hover { filter: brightness(1.08); }
+            .folder-modal-copy:active { transform: scale(0.97); }
+            /* Confirmed state: slightly deeper green so the change reads as
+               deliberate rather than a render glitch. Hover brightening is
+               suppressed — the pointer is still over the button after the
+               click, and a hover highlight on a confirmation looks live. */
+            .folder-modal-copy.is-copied {
+                background: linear-gradient(180deg, #9ed13f 0%, #7fae24 100%);
+                filter: none;
+            }
+            .folder-modal-copy.is-copied:hover { filter: none; }
+            /* Status line under the meta — green when live, red when not.
+               Colour is set from the drive's status in renderer.js. */
+            .folder-modal-status {
+                margin-top: 2px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            .folder-modal-status:empty { display: none; }
+
+            /* The modal's single horizontal rule: header above, content
+               below. Nothing between the search and the items. */
+            .folder-modal-rule {
+                height: 1px;
+                background: rgba(255, 255, 255, 0.10);
+            }
+
+            .folder-modal-search {
+                position: relative;
+                flex-shrink: 0;
+            }
+            .folder-modal-search input {
+                width: 100%;
+                box-sizing: border-box;
+                height: 52px;
+                padding: 0 52px 0 20px;
+                border: none;
+                border-radius: 14px;
+                background: rgba(255, 255, 255, 0.09);
+                color: #fff;
+                font-family: inherit;
+                font-size: 15px;
+                outline: none;
+            }
+            .folder-modal-search input::placeholder {
+                color: rgba(255, 255, 255, 0.45);
+            }
+            .folder-modal-search input:focus {
+                background: rgba(255, 255, 255, 0.13);
+            }
+            .folder-modal-search-icon {
+                position: absolute;
+                right: 18px;
+                top: 50%;
+                transform: translateY(-50%);
+                width: 22px;
+                height: 22px;
+                color: rgba(255, 255, 255, 0.75);
+                pointer-events: none;
+            }
+            .folder-modal-search-icon svg { width: 100%; height: 100%; }
+
+            /* Amber, matching the warning family used for status labels.
+               Not red: an empty search result is not a failure, it is just
+               a query that found nothing. */
+            .folder-modal-note {
+                margin-top: -4px;
+                font-size: 13px;
+                font-weight: 600;
+                color: #eab308;
+            }
+            .folder-modal-note:empty { display: none; }
             .folder-modal-heading {
                 display: flex;
                 align-items: center;
@@ -3832,12 +4005,11 @@
            instead of fading, which reads as "no animation at all". The 0%
            stop therefore carries three zero-size shadows rather than none.
 
-           The `prefers-reduced-motion` guard below is NOT optional: a
-           pulsing element is exactly what that setting exists to stop, and
-           for some people motion like this causes real discomfort. If the
-           glow is invisible on a given machine, that setting is the first
-           thing to check — turn animations on there rather than removing
-           this. */
+           The `prefers-reduced-motion` guard below is not optional: a pulsing
+           element is exactly what that setting exists to stop, and for some
+           people motion like this causes real discomfort. If the glow is
+           invisible on a machine, check that setting there rather than
+           removing this. */
         @keyframes drive-item-resume-glow {
             0%, 100% {
                 filter: drop-shadow(0 0 0 rgba(214, 255, 120, 0))
@@ -5910,6 +6082,15 @@
             <!-- Favorites empty state (Figma screen #20). Shown purely by
                  CSS when the Favorites tab is active and no slot carries
                  data-fav="true" — see the :has() rule in the stylesheet. -->
+            <!-- No-results state for the search box. Shown purely by CSS
+                 when a query is active and no slot matches. -->
+            <div class="search-empty" id="searchEmpty">
+                <div class="search-empty-title">No matches</div>
+                <div class="search-empty-text">
+                    Nothing here matches <span class="search-empty-term" id="searchEmptyTerm"></span>.
+                </div>
+            </div>
+
             <div class="favorites-empty" id="favoritesEmpty">
                 <div class="favorites-empty-icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round">
@@ -6048,6 +6229,13 @@
          ============================================================ -->
     <div class="modal-overlay folder-modal-overlay" id="folderModalOverlay">
         <div class="modal folder-modal">
+            <!-- Close sits on its own line above the header (Figma), not
+                 inline with the title, so the Copy Link pill owns the right
+                 end of the header row. -->
+            <div class="folder-modal-topbar">
+                <button type="button" class="folder-modal-close" id="folderModalCloseBtn" aria-label="Close">&times;</button>
+            </div>
+
             <div class="folder-modal-header">
                 <div class="folder-modal-heading">
                     <span class="folder-modal-icon" aria-hidden="true">
@@ -6058,13 +6246,33 @@
                     <div class="folder-modal-heading-text">
                         <h2 class="folder-modal-title" id="folderModalTitle">Folder</h2>
                         <div class="folder-modal-sub" id="folderModalSub">&mdash;</div>
+                        <div class="folder-modal-status" id="folderModalStatus"></div>
                     </div>
                 </div>
-                <button type="button" class="folder-modal-close" id="folderModalCloseBtn" aria-label="Close">&times;</button>
+                <button type="button" class="folder-modal-copy" id="folderModalCopyBtn">Copy Link</button>
             </div>
 
+            <!-- The one rule in this modal: header above, content below. -->
+            <div class="folder-modal-rule"></div>
+
+            <div class="folder-modal-search">
+                <input type="text" id="folderModalSearch" placeholder="Search" autocomplete="off" spellcheck="false">
+                <span class="folder-modal-search-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                        <circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path>
+                    </svg>
+                </span>
+            </div>
+
+            <!-- Search feedback sits with the search box, not in the grid:
+                 the message is about the query, so it belongs next to the
+                 thing that produced it. Empty -> display:none, so it takes
+                 no space and opens no gap. -->
+            <div class="folder-modal-note" id="folderModalNote"></div>
+
             <!-- Two-column card grid, same visual language as the main
-                 list. Rows injected by renderer.js. -->
+                 list. Rows injected by renderer.js. No rule above it —
+                 the search bar is the last thing before the items. -->
             <div class="folder-modal-grid" id="folderModalGrid"></div>
 
             <div class="modal-actions folder-modal-actions">

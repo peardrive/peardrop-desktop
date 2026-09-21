@@ -1,7 +1,7 @@
 /**
  * MODULE: renderer.js (PearDrop v2)
  * PURPOSE: PearDrop UI - Integrated ScrollList + DriveItem with PearCore backend
- * VERSION: 0.19.1
+ * VERSION: 0.27.0
  * 
  * ARCHITECTURE:
  *   - Uses ScrollList v2 slot-based system
@@ -564,16 +564,28 @@ function init() {
                         clearInitiatingWatchdog(event.data.id);
                         updateDriveInList({ id: event.data.id, status: 'inactive' });
                     } else if (event.action === 'resume') {
-                        // A resumed share re-joins the swarm and re-announces,
-                        // so it is not reachable the instant the IPC returns.
-                        // Same initiating -> sharing path as a fresh share.
-                        if (event.data.type === 'share') {
-                            announcedDrives.delete(event.data.id);
-                            updateDriveInList({ id: event.data.id, status: 'initiating' });
-                            armInitiatingWatchdog(event.data.id);
-                        } else {
-                            updateDriveInList({ id: event.data.id, status: 'downloading' });
-                        }
+                        // Reaching here means RESUME SEEDING, for either
+                        // direction. drives-resume re-opens the Corestore,
+                        // rejoins the swarm and re-announces — it never
+                        // starts a transfer, so "downloading" would describe
+                        // an operation that did not happen.
+                        //
+                        // This used to branch on `type === 'share'` and send
+                        // everything else to 'downloading'. But `type`
+                        // records where a file CAME FROM, not what the drive
+                        // is doing: a completed download stays type
+                        // 'download' forever, so every re-seeded download was
+                        // labelled "Downloading" — with a cancel X offering
+                        // to stop a transfer that did not exist.
+                        //
+                        // The genuinely-unfinished case never gets here: it
+                        // is caught earlier by the `status === 'interrupted'`
+                        // branch, which calls handleDownload and correctly
+                        // says downloading. By this point the drive has its
+                        // files, and seeding is the only thing resume means.
+                        announcedDrives.delete(event.data.id);
+                        updateDriveInList({ id: event.data.id, status: 'initiating' });
+                        armInitiatingWatchdog(event.data.id);
                     }
                 }
             });
@@ -655,6 +667,9 @@ function init() {
 
     // Initialize sort UI
     updateSortUI();
+
+    // Wire the list search box (was decorative — no JS referenced it).
+    bindListSearch();
 
     // Load existing drives
     loadDrives();
@@ -1031,13 +1046,12 @@ async function startDownload() {
     }
     
     // Re-downloading a link already in the list is refused: point at the row
-    // that already exists instead. This also covers pasting your OWN share
-    // link, which otherwise opens a second receiver session against a key
-    // this app is already seeding.
+    // that already exists instead. Also covers pasting your OWN share link,
+    // which otherwise opens a second receiver session against a key this app
+    // is already seeding.
     //
-    // A future refinement, already modelled in decideDupCheckAction()
-    // (lib/dup-check-action.js, currently unused), offers a glass confirm
-    // with "Show in list" / "Download again" rather than a flat refusal.
+    // decideDupCheckAction() in lib/dup-check-action.js models the nicer
+    // "Show in list" / "Download again" confirm, and remains unused.
     if (dupCheck.isDuplicate) {
         highlightExistingDrive(dupCheck.driveId);
         showAlreadyDownloadedMessage('Already downloaded');
@@ -1465,6 +1479,10 @@ function addDriveToList(drive, options = {}) {
         // appears under Favorites, since it isn't starred) — it looks like
         // the demo helper is broken when it is only being filtered.
         if (drive.isDemo) result.slot.dataset.demo = 'true';
+        // Respect any active query: a row added while a search is running
+        // must not appear just because it is new.
+        result.slot.dataset.match =
+            driveMatchesSearch(drive, listSearchQuery.trim().toLowerCase()) ? 'true' : 'false';
         // A card that mounts already 'initiating' needs the watchdog running,
         // or a share that never announces would sit there forever.
         if (drive.status === 'initiating' && !drive.isDemo) armInitiatingWatchdog(drive.id);
@@ -1503,6 +1521,23 @@ function updateDriveInList(drive) {
         item.setVisibility(newPreset);
     }
     
+    // An open folder modal is showing a snapshot of this drive — keep its
+    // header honest rather than leaving it frozen at whatever it said when
+    // it opened.
+    window.syncFolderModalDrive?.(drive);
+
+    // A rename changes what this row can be found by, so re-test it against
+    // the active query instead of leaving a stale match flag.
+    if (listSearchQuery && (drive.title !== undefined || drive.files !== undefined)) {
+        const slot = scrollList?._slots?.get(drive.id)?.slot;
+        if (slot) {
+            const full = idx >= 0 ? drives[idx] : drive;
+            slot.dataset.match =
+                driveMatchesSearch(full, listSearchQuery.trim().toLowerCase()) ? 'true' : 'false';
+            reindexVisibleSlots();
+        }
+    }
+
     // Re-sort if relevant field changed
     if (sortField === 'status' && drive.status && drive.status !== oldStatus) {
         applySorting();
@@ -1745,6 +1780,119 @@ function deriveStatusFromState(drive) {
     // drive-announced event promote it, or the watchdog fail it.
     if (state !== 'active') return 'inactive';
     return announcedDrives.has(drive.id || drive.driveId) ? 'sharing' : 'initiating';
+}
+
+// ─── List search ────────────────────────────────────────────────────────
+// Filters the drive list by name, applied the same way the tab filters are:
+// an attribute on each slot plus one CSS rule. Nothing is re-rendered and no
+// DOM is discarded, so scroll position, running progress bars and open
+// thumbnails all survive typing — and a query composes with whichever tab is
+// active rather than fighting it.
+let listSearchQuery = '';
+
+/**
+ * What a row can be found by.
+ *
+ * Includes the ORIGINAL name as well as the displayed one: renaming a share
+ * to "Holiday" must not hide it from a search for its real filename. A
+ * rename is a label, not a disguise.
+ *
+ * Also includes the names of files INSIDE a folder share, so searching for
+ * one file surfaces the folder holding it — otherwise a multi-file share is
+ * only findable by the placeholder word "Folder", which every one of them
+ * shares.
+ */
+function driveSearchHaystack(drive) {
+    if (!drive) return '';
+    const parts = [drive.title, drive.originalTitle];
+    if (Array.isArray(drive.files)) {
+        for (const f of drive.files) if (f && f.name) parts.push(f.name);
+    }
+    return parts.filter(Boolean).join(' | ').toLowerCase();
+}
+
+/**
+ * Does one file name satisfy the query? Same every-term rule as the list.
+ * Top-level so the list, the card's file count and the folder modal all
+ * decide "does this file match" with one piece of code — three copies of
+ * this rule would drift, and the count on the card would stop agreeing with
+ * the rows behind it.
+ */
+function nameMatchesTerms(name, q) {
+    if (!q) return true;
+    const hay = String(name || '').toLowerCase();
+    return q.split(/\s+/).filter(Boolean).every(term => hay.includes(term));
+}
+
+/** How many of a drive's files match. 0 when it has no file list. */
+function countMatchingFiles(drive, q) {
+    if (!drive || !Array.isArray(drive.files)) return 0;
+    if (!q) return drive.files.length;
+    return drive.files.filter(f => f && nameMatchesTerms(f.name, q)).length;
+}
+
+function driveMatchesSearch(drive, q) {
+    if (!q) return true;
+    const hay = driveSearchHaystack(drive);
+    // Every whitespace-separated term must appear somewhere. "matrix 1080"
+    // then finds "The.Matrix.1080p.mkv" regardless of word order, which is
+    // how people actually half-remember a filename.
+    return q.split(/\s+/).filter(Boolean).every(term => hay.includes(term));
+}
+
+function applyListSearch() {
+    if (!listContainer || !scrollList || !scrollList._slots) return;
+    const q = listSearchQuery.trim().toLowerCase();
+
+    listContainer.classList.toggle('is-searching', !!q);
+    const termEl = document.getElementById('searchEmptyTerm');
+    if (termEl) termEl.textContent = q ? `“${listSearchQuery.trim()}”` : '';
+
+    for (const [id, slotData] of scrollList._slots) {
+        const slot = slotData && slotData.slot;
+        if (!slot) continue;
+        const drive = drives.find(d => d.id === id);
+        slot.dataset.match = driveMatchesSearch(drive, q) ? 'true' : 'false';
+
+        // Make the card's file count agree with what opening it will show.
+        // Searching "sa" on a 2-file folder with one hit said "2 Files" next
+        // to a single result — the card contradicting the folder behind it.
+        //
+        // DISPLAY ONLY: the true count stays in drives[] (and is always
+        // recoverable from files.length), so nothing downstream ever reads
+        // the filtered number.
+        const item = driveItems.get(id);
+        if (item && drive && Array.isArray(drive.files)) {
+            const total = drive.files.length;
+            const hits = q ? countMatchingFiles(drive, q) : total;
+            // hits === 0 means the folder matched on its NAME, not its
+            // contents — it opens showing everything, so show everything.
+            const want = (q && hits > 0) ? hits : total;
+            if (item.getData?.().fileCount !== want) item.update({ fileCount: want });
+        }
+    }
+    // Visible-slot bookkeeping drives the two-column left/right striping,
+    // so it has to run after rows appear or disappear.
+    reindexVisibleSlots();
+}
+
+function bindListSearch() {
+    const input = document.getElementById('listSearchInput');
+    if (!input) return;
+    input.addEventListener('input', () => {
+        listSearchQuery = input.value;
+        applyListSearch();
+    });
+    // Esc clears the query rather than blurring — recovering from a typo
+    // should not cost the focus as well.
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && input.value) {
+            e.stopPropagation();
+            input.value = '';
+            listSearchQuery = '';
+            applyListSearch();
+        }
+    });
 }
 
 // ─── Local file availability ────────────────────────────────────────────
@@ -2110,6 +2258,13 @@ function bindIPC() {
                 drive.peers--;
                 item.update({ peers: drive.peers });
             }
+            // A peer that leaves MID-transfer never produces
+            // 'upload-complete', so without this the card keeps showing the
+            // speed of a transfer that has stopped. Only once the last one
+            // is gone — other peers may still be pulling.
+            if (!drive || drive.peers <= 0) {
+                item.update({ speed: 0 });
+            }
         }
     });
     
@@ -2156,6 +2311,25 @@ function bindIPC() {
         }
     });
     
+    // A peer finished pulling from us.
+    //
+    // This event has been emitted all along — tracker 'complete' ->
+    // manager 'upload-complete' -> main -> here — and NOTHING subscribed.
+    // So a share's speed was written on every chunk and never cleared: the
+    // last value from the final chunk stayed frozen on the card forever,
+    // which is why it never "refreshed on its own".
+    //
+    // peerId 'self' is main's marker for OUR download finishing; that case
+    // belongs to onFilesDownloaded below, not here.
+    window.electronAPI.onUploadComplete?.((event, data) => {
+        const driveId = data && data.driveId;
+        if (!driveId || data.peerId === 'self') return;
+        const item = driveItems.get(driveId);
+        if (!item) return;
+        // Back to a plain "Active": still shared, nothing moving.
+        item.update({ status: 'sharing', speed: 0 });
+    });
+
     // Download complete
     window.electronAPI.onFilesDownloaded?.((event, data) => {
         const { driveId, files, isSeeding } = data;
@@ -4083,6 +4257,11 @@ setActivePage('allshares');
     function openReceiveModal() {
         if (!receiveModalOverlay) return;
         receiveModalOverlay.classList.add('active');
+        // Reset the field and the button label. Close already does this, but
+        // the QR sub-flow can re-enter without one, and a stale "Download"
+        // sitting over an empty field would do nothing when pressed.
+        if (receivePasteInput) receivePasteInput.value = '';
+        updateReceiveLinkHint();
         if (receivePasteInput) receivePasteInput.focus();
     }
     function closeReceiveModal() {
@@ -4105,9 +4284,28 @@ setActivePage('allshares');
     // download flow. Keeps all validation/error-handling in one place.
     function submitReceiveLink() {
         if (!receivePasteInput) return;
-        const link = receivePasteInput.value.trim();
-        if (!link) {
+        const raw = receivePasteInput.value.trim();
+        if (!raw) {
             receivePasteInput.focus();
+            return;
+        }
+        // Hand the engine the EXTRACTED link, never the raw field. Pasting a
+        // chat line ("here you go peardrop://ab12… enjoy") used to send the
+        // whole sentence downstream and fail with a vague error.
+        const link = extractPeardropLink(raw);
+        if (!link) {
+            updateReceiveLinkHint();
+            receivePasteInput.focus();
+            return;
+        }
+        // Enter must not walk past a link we already know is a duplicate —
+        // the button says "Show in list" for a reason.
+        if (receiveBtnState === 'existing') {
+            const id = receiveExistingId;
+            closeReceiveModal();
+            if (id && typeof highlightExistingDrive === 'function') {
+                highlightExistingDrive(id);
+            }
             return;
         }
         // Existing startDownload reads from #linkInput — set it, then fire.
@@ -4122,22 +4320,134 @@ setActivePage('allshares');
     const receiveLinkHint = document.getElementById('receiveLinkHint');
     const PEARDROP_LINK_RE = /peardrop:\/\/[a-f0-9]{64}/i;
 
+    /**
+     * Pull a usable link out of whatever was pasted.
+     *
+     * People rarely paste a bare link — it arrives inside a chat message, or
+     * line-wrapped by an email client, which splits the key across a newline
+     * and stops it matching at all. Whitespace is stripped before matching,
+     * and the MATCH is returned rather than the raw string, so surrounding
+     * words never reach the engine.
+     *
+     * Lower-cased because the key is hex and downstream comparisons (the
+     * duplicate check) are string equality.
+     */
+    function extractPeardropLink(raw) {
+        const compact = String(raw || '').replace(/\s+/g, '');
+        const m = compact.match(PEARDROP_LINK_RE);
+        return m ? m[0].toLowerCase() : null;
+    }
+
+    // The paste button is a three-state control:
+    //   empty input        -> "Paste"     (read the clipboard)
+    //   valid link         -> "Download"  (start the transfer)
+    //   anything else      -> "Clear"     (empty the field and start over)
+    // Enter in the field still submits regardless, because some people will
+    // always reach for it and taking that away would be a downgrade.
+    let receiveBtnState = 'paste';
+    // Drive id behind an 'existing' state, for "Show in list".
+    let receiveExistingId = null;
+    // Guards against a slow duplicate-check answering for a link the user
+    // has already typed past. Only the newest request may touch the UI.
+    let receiveCheckToken = 0;
+    let receiveCheckTimer = null;
+
+    function updateReceiveButton(state) {
+        receiveBtnState = state;
+        if (!receivePasteBtn) return;
+        receivePasteBtn.classList.remove('is-download', 'is-clear', 'is-existing');
+        if (state === 'download') {
+            receivePasteBtn.textContent = 'Download';
+            receivePasteBtn.classList.add('is-download');
+        } else if (state === 'clear') {
+            receivePasteBtn.textContent = 'Clear';
+            receivePasteBtn.classList.add('is-clear');
+        } else if (state === 'existing') {
+            receivePasteBtn.textContent = 'Show in list';
+            receivePasteBtn.classList.add('is-existing');
+        } else {
+            receivePasteBtn.textContent = 'Paste';
+        }
+    }
+
+    /**
+     * A link can be well-formed and still not worth downloading: it may be
+     * YOUR OWN share, or something already in your list. Both were only
+     * discovered after pressing Download, when the modal had already closed
+     * and the refusal arrived as a toast with no context.
+     *
+     * Answering here means the message appears under the field, beside the
+     * link it is about, before anything is committed.
+     */
+    async function checkReceiveDuplicate(link) {
+        if (!window.electronAPI?.hyperdriveCheckDuplicate) return;
+        const token = ++receiveCheckToken;
+        let res;
+        try {
+            res = await window.electronAPI.hyperdriveCheckDuplicate({ shareLink: link });
+        } catch (_) {
+            return;   // check unavailable — leave the optimistic state alone
+        }
+        // The field moved on while we were waiting.
+        if (token !== receiveCheckToken) return;
+        if (!res || !res.isDuplicate) return;
+        // And it still holds the same link.
+        if (extractPeardropLink(receivePasteInput.value) !== link) return;
+
+        const entry = res.existingDrive || {};
+        const isOwnShare = entry.isUpload !== false;
+        const filesGone = res.localStatus === 'missing';
+
+        if (receiveLinkHint) {
+            receiveLinkHint.classList.remove('is-valid', 'is-invalid');
+            receiveLinkHint.classList.add('is-warn');
+            receiveLinkHint.textContent = isOwnShare
+                ? 'This is your own share — it is already in your list'
+                : filesGone
+                    ? 'Already in your list, but its files were removed'
+                    : 'You have already downloaded this';
+        }
+        receiveExistingId = res.driveId || entry.id || null;
+        updateReceiveButton('existing');
+    }
+
     function updateReceiveLinkHint() {
-        if (!receiveLinkHint || !receivePasteInput) return;
+        if (!receivePasteInput) return;
         const raw = receivePasteInput.value.trim();
-        receiveLinkHint.classList.remove('is-valid', 'is-invalid');
+        if (receiveLinkHint) receiveLinkHint.classList.remove('is-valid', 'is-invalid', 'is-warn');
+
+        // Any edit invalidates an in-flight check and any stored result.
+        receiveCheckToken++;
+        receiveExistingId = null;
+        if (receiveCheckTimer) { clearTimeout(receiveCheckTimer); receiveCheckTimer = null; }
+
         if (!raw) {
-            receiveLinkHint.textContent = '';
+            if (receiveLinkHint) receiveLinkHint.textContent = '';
+            updateReceiveButton('paste');
             return;
         }
-        if (PEARDROP_LINK_RE.test(raw)) {
-            receiveLinkHint.textContent = 'Press Enter to download';
-            receiveLinkHint.classList.add('is-valid');
+        const link = extractPeardropLink(raw);
+        if (link) {
+            if (receiveLinkHint) {
+                receiveLinkHint.textContent = 'Press Enter to download';
+                receiveLinkHint.classList.add('is-valid');
+            }
+            updateReceiveButton('download');
+            // Debounced so typing a link character by character does not fire
+            // a check per keystroke. Optimistic in the meantime: startDownload
+            // runs the same check anyway, so a hurried Enter is still refused.
+            // Debounced so typing a link character by character does not fire
+            // a check per keystroke. Optimistic in the meantime: startDownload
+            // runs the same check anyway, so a hurried Enter is still refused.
+            receiveCheckTimer = setTimeout(() => checkReceiveDuplicate(link), 200);
         } else {
-            receiveLinkHint.textContent = raw.toLowerCase().startsWith('peardrop://')
-                ? 'Invalid link — the key must be exactly 64 characters'
-                : 'Invalid link';
-            receiveLinkHint.classList.add('is-invalid');
+            if (receiveLinkHint) {
+                receiveLinkHint.textContent = raw.toLowerCase().includes('peardrop://')
+                    ? 'Invalid link — the key must be exactly 64 characters'
+                    : 'Invalid link';
+                receiveLinkHint.classList.add('is-invalid');
+            }
+            updateReceiveButton('clear');
         }
     }
 
@@ -4150,6 +4460,29 @@ setActivePage('allshares');
     // to see or correct the link first.
     if (receivePasteBtn) {
         receivePasteBtn.addEventListener('click', async () => {
+            // Download: the field already holds a good link.
+            if (receiveBtnState === 'download') {
+                submitReceiveLink();
+                return;
+            }
+            // Already have it: take them to the row instead of fetching it
+            // again. Closing first so the highlight is actually visible.
+            if (receiveBtnState === 'existing') {
+                const id = receiveExistingId;
+                closeReceiveModal();
+                if (id && typeof highlightExistingDrive === 'function') {
+                    highlightExistingDrive(id);
+                }
+                return;
+            }
+            // Clear: the field holds something unusable. Empty it and put
+            // the caret back so the next attempt costs nothing.
+            if (receiveBtnState === 'clear') {
+                receivePasteInput.value = '';
+                updateReceiveLinkHint();
+                receivePasteInput.focus();
+                return;
+            }
             try {
                 const text = (await navigator.clipboard.readText() || '').trim();
                 if (!text) {
@@ -4812,6 +5145,10 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
     const subEl    = document.getElementById('folderModalSub');
     const closeBtn = document.getElementById('folderModalCloseBtn');
     const doneBtn  = document.getElementById('folderModalDoneBtn');
+    const statusEl = document.getElementById('folderModalStatus');
+    const copyBtn  = document.getElementById('folderModalCopyBtn');
+    const searchEl = document.getElementById('folderModalSearch');
+    const noteEl   = document.getElementById('folderModalNote');
 
     const esc = (v) => window.PearUtils.escapeHtml(v == null ? '' : String(v));
     const fmt = (n) => {
@@ -4821,8 +5158,100 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
 
     // Files currently rendered, indexed by the row's data-file-index.
     let currentFiles = [];
+    // The drive the modal is showing, for Copy Link.
+    let currentDrive = null;
+
+    // Same status vocabulary as the cards, so the modal header and the row
+    // it was opened from can never say different things.
+    const STATUS_TEXT = {
+        sharing: 'Active', complete: 'Completed', initiating: 'Initiating',
+        inactive: 'Inactive', unreachable: 'Not reachable', lost: 'Share lost',
+        missing: 'Files removed', error: 'Failed', interrupted: 'Disconnected',
+        downloading: 'Downloading', connecting: 'Connecting'
+    };
+    const STATUS_GREEN = new Set(['sharing', 'complete']);
+    const STATUS_AMBER = new Set(['initiating', 'downloading', 'connecting', 'interrupted']);
+
+    /**
+     * Paint the rows. Split out of openFolderModal so the search box can
+     * re-render a filtered subset without reopening anything.
+     *
+     * `data-file-index` stays the index into currentFiles, NOT the position
+     * in the filtered list — every click handler, the thumbnail loader and
+     * the missing-file marker all look files up by it, and renumbering on
+     * filter would quietly open the wrong file.
+     */
+    // Delegates to the shared matcher so the rows here, the card's file
+    // count and the list filter can never disagree about what "matches".
+    const fileMatchesQuery = (name, q) => nameMatchesTerms(name, q);
+
+    function renderFolderRows(query) {
+        const q = String(query || '').trim().toLowerCase();
+        const rows = currentFiles
+            .map((f, i) => ({ f, i }))
+            .filter(({ f }) => fileMatchesQuery(f.name, q));
+
+        if (noteEl) noteEl.textContent = '';
+
+        if (!currentFiles.length) {
+            gridEl.innerHTML = '<div class="folder-modal-empty">This folder has no files yet.</div>';
+            return;
+        }
+        // A query that matched nothing is reported under the SEARCH BOX, in
+        // amber — the message is about the query, so it belongs beside the
+        // thing that produced it rather than floating in the empty grid.
+        if (!rows.length) {
+            gridEl.innerHTML = '';
+            if (noteEl) noteEl.textContent = `No files match “${String(query).trim()}”`;
+            return;
+        }
+
+        gridEl.innerHTML = rows.map(({ f, i }) => `
+                <div class="folder-file" data-file-index="${i}">
+                    <span class="folder-file-thumb" data-file-index="${i}">${getFileIcon(f.name)}</span>
+                    <div class="folder-file-text">
+                        <div class="folder-file-name" title="${esc(f.name)}">${esc(f.name)}</div>
+                        <div class="folder-file-meta">${fmt(f.size)}</div>
+                    </div>
+                    <button type="button" class="folder-file-open" data-file-index="${i}">Open</button>
+                </div>`).join('');
+
+        loadFolderThumbs();
+        markMissingFolderFiles();
+    }
+
+    function paintFolderStatus(st) {
+        if (!statusEl) return;
+        statusEl.textContent = STATUS_TEXT[st] || '';
+        statusEl.style.color = STATUS_GREEN.has(st) ? '#6ac168'
+            : STATUS_AMBER.has(st) ? '#f0b840'
+            : '#ff6b6b';
+    }
+
+    /**
+     * Keep an OPEN folder modal in step with its drive.
+     *
+     * The header used to be painted once, at open. Opening a folder during
+     * startup therefore froze it on "Initiating" — the card behind it went
+     * Active seconds later when the announce landed, and the modal went on
+     * claiming otherwise for as long as it stayed open.
+     *
+     * Called from updateDriveInList, which every status change already
+     * passes through.
+     */
+    function syncFolderModalDrive(update) {
+        if (!update || !currentDrive || update.id !== currentDrive.id) return;
+        if (!overlay.classList.contains('active')) return;
+        currentDrive = { ...currentDrive, ...update };
+        if (update.status !== undefined) paintFolderStatus(currentDrive.status);
+        // A link can appear after the fact (a re-share mints a new one).
+        if (update.shareLink !== undefined) copyBtn.hidden = !currentDrive.shareLink;
+        if (update.title !== undefined) titleEl.textContent = currentDrive.title || 'Folder';
+    }
+    window.syncFolderModalDrive = syncFolderModalDrive;
 
     function openFolderModal(drive) {
+        currentDrive = drive || null;
         currentFiles = Array.isArray(drive && drive.files) ? drive.files : [];
         titleEl.textContent = (drive && drive.title) || 'Folder';
 
@@ -4831,22 +5260,33 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
             ? `${currentFiles.length} file${currentFiles.length !== 1 ? 's' : ''} · ${fmt(total)}`
             : 'Empty folder';
 
-        gridEl.innerHTML = currentFiles.length
-            ? currentFiles.map((f, i) => `
-                <div class="folder-file" data-file-index="${i}">
-                    <span class="folder-file-thumb" data-file-index="${i}">${getFileIcon(f.name)}</span>
-                    <div class="folder-file-text">
-                        <div class="folder-file-name" title="${esc(f.name)}">${esc(f.name)}</div>
-                        <div class="folder-file-meta">${fmt(f.size)}</div>
-                    </div>
-                    <button type="button" class="folder-file-open" data-file-index="${i}">Open</button>
-                </div>`).join('')
-            : '<div class="folder-modal-empty">This folder has no files yet.</div>';
+        // Status line under the meta, coloured the same way the card is.
+        paintFolderStatus(drive && drive.status);
+
+        // No link, no button — better than a button that copies nothing.
+        const link = drive && drive.shareLink;
+        copyBtn.hidden = !link;
+
+        // Carry the list's search into the folder.
+        //
+        // If the folder is on screen because one of its FILES matched, the
+        // useful view is those files — not all forty with the match buried
+        // among them. So the query is seeded into the folder's own search
+        // box (visible and editable, not a hidden filter).
+        //
+        // But only when a file actually matches. A folder can also be a hit
+        // on its own NAME, and filtering its contents by that name would
+        // open it onto an empty grid — the search would look broken at the
+        // exact moment it succeeded.
+        const listQ = (typeof listSearchQuery === 'string' ? listSearchQuery : '').trim();
+        const seed = listQ && currentFiles.some(f => f && fileMatchesQuery(f.name, listQ.toLowerCase()))
+            ? listQ
+            : '';
+        if (searchEl) searchEl.value = seed;
+        renderFolderRows(seed);
 
         overlay.classList.add('active');
         gridEl.scrollTop = 0;
-        loadFolderThumbs();
-        markMissingFolderFiles();
     }
 
     /**
@@ -4881,6 +5321,10 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
 
     function closeFolderModal() {
         overlay.classList.remove('active');
+        // Don't leave a stale "Copied!" waiting for the next open — the
+        // modal reopens on a different folder and the label would be a
+        // leftover answer to an older click.
+        resetCopyBtn();
     }
 
     // Swap the emoji placeholder for a real thumbnail where main can
@@ -4936,6 +5380,56 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
 
     closeBtn?.addEventListener('click', closeFolderModal);
     doneBtn?.addEventListener('click', closeFolderModal);
+
+    // Copy the FOLDER's link — the share is one drive, so there is one link
+    // for all of it. Individual files inside do not have their own.
+    // Confirmation lands ON the button for 2s. The toast alone made the user
+    // look away from the thing they just pressed to find out whether it
+    // worked; the answer belongs where the click happened.
+    let copyResetTimer = null;
+    copyBtn?.addEventListener('click', async () => {
+        const link = currentDrive && currentDrive.shareLink;
+        if (!link) return showToast('No link for this share', 'error');
+        try {
+            await navigator.clipboard.writeText(link);
+            // Freeze the width before swapping the label, or the pill jumps
+            // between "Copy Link" and "Copied!" and back again.
+            copyBtn.style.minWidth = `${copyBtn.offsetWidth}px`;
+            copyBtn.textContent = 'Copied!';
+            copyBtn.classList.add('is-copied');
+            // Re-clicking mid-countdown restarts it rather than letting the
+            // first timer revert the label while the second is still running.
+            if (copyResetTimer) clearTimeout(copyResetTimer);
+            copyResetTimer = setTimeout(resetCopyBtn, 2000);
+        } catch (err) {
+            showToast('Could not copy link', 'error');
+        }
+    });
+
+    function resetCopyBtn() {
+        if (copyResetTimer) { clearTimeout(copyResetTimer); copyResetTimer = null; }
+        if (!copyBtn) return;
+        copyBtn.textContent = 'Copy Link';
+        copyBtn.classList.remove('is-copied');
+        copyBtn.style.minWidth = '';
+    }
+
+    // Filter as you type. Cheap enough to run per keystroke: it re-renders
+    // at most a few dozen rows from an array already in memory.
+    searchEl?.addEventListener('input', () => {
+        renderFolderRows(searchEl.value);
+        gridEl.scrollTop = 0;
+    });
+
+    // Esc inside the search clears it rather than closing the modal — losing
+    // the whole view because you wanted to undo a search is a bad trade.
+    searchEl?.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && searchEl.value) {
+            e.stopPropagation();
+            searchEl.value = '';
+            renderFolderRows('');
+        }
+    });
     overlay.addEventListener('click', (e) => {
         if (e.target === overlay) closeFolderModal();
     });
@@ -4960,6 +5454,8 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
     const inputEl  = document.getElementById('renameInput');
     const hintEl   = document.getElementById('renameHint');
     const resetBtn = document.getElementById('renameResetBtn');
+    // The row holding the original name and the Reset button.
+    const hintRow  = document.querySelector('#renameModalOverlay .rename-hint');
     const cancelBtn = document.getElementById('renameCancelBtn');
     const saveBtn  = document.getElementById('renameSaveBtn');
 
@@ -4991,6 +5487,13 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
             ? `Original name: <span class="rename-orig">${window.PearUtils.escapeHtml(currentOriginal)}</span>`
             : '';
         resetBtn.hidden = !alias;
+
+        // Collapse the whole row when it carries neither the original name
+        // nor the Reset button. It used to keep a reserved 17px line so the
+        // Save row could not jump — but on a folder card with no alias BOTH
+        // are absent, and the reserved line is just a gap under the input.
+        // The anti-jump reservation still applies whenever there is content.
+        hintRow?.classList.toggle('is-empty', !hasRealOriginal && !alias);
 
         overlay.classList.add('active');
         // Focus after the opening fade so the caret doesn't render mid-animation.

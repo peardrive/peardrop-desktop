@@ -1,7 +1,7 @@
 /**
  * MODULE: main.js (PearDrop v2)
  * PURPOSE: Electron main process for PearDrop - P2P file sharing
- * VERSION: 0.24.0
+ * VERSION: 0.27.0
  * EXPORTS: None (entry point)
  * FUNCTIONS:
  * createWindow() - Creates main BrowserWindow with platform-aware styling
@@ -14,6 +14,7 @@
  * 'hyperdrive-open' - Connect to remote drive (includes dedup check)
  * 'hyperdrive-download' - Download files from opened drive
  * 'hyperdrive-download-cancel' - Abort an in-flight download
+ * 'hyperdrive-share-cancel' - Abort an in-flight share build
  *   HyperdriveManager (UI Interface):
  * 'drive-get' - Get single drive by ID
  * 'drives-list' - Get all tracked drives
@@ -30,6 +31,7 @@
  * 'log-get-path' / 'log-reveal' / 'log-read-tail' - diagnostics log (reset-notice gating)
  * 'check-legacy-data-present' - Detect pre-unified state files
  * 'get-file-thumbnail' - Image src or OS-native icon for a file
+ * 'files-exist' - Which of these paths are still on disk
  * 'get-debug' - Get current debug state
  * 'set-debug' - Set debug state (persists to config)
  * IPC EVENTS SENT (to renderer):
@@ -37,11 +39,14 @@
  * 'peer-disconnected' - Peer left
  * 'upload-progress' - Transfer progress update
  * 'share-progress' - Per-file progress while a share is being built
- * 'hyperdrive-share-cancel' - Abort an in-flight share build
  * 'upload-complete' - Transfer finished
  * 'files-downloaded' - Download complete with file list
  * 'drives-updated' - Drive added/removed/changed
  * 'download-peer-disconnected' - Sender went offline during download
+ * 'drive-ready-to-download' - Resumed drive reconnected, can continue
+ * 'drive-resume-failed' - A drive could not be resumed at boot
+ * 'drive-announced' - Share is announced on the DHT (now reachable)
+ * 'drive-announce-failed' - DHT announce failed for a share
  * EXTERNAL CALLS:
  * lib/hyperdrive-manager.js (manager singleton) - Single source of truth for drives
  * lib/downloader.js (downloadFromDrive)
@@ -49,6 +54,7 @@
  * lib/logger.js (createLogger, loadConfig, setDebug)
  * KEY STATE:
  * mainWindow - BrowserWindow instance
+ * announcedDrives - Set of driveIds whose DHT announce has landed
  * APP_DATA_DIR - ~/peardrop
  * DOWNLOADS_DIR - ~/peardrop/downloads
  * PLATFORM SUPPORT:

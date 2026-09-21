@@ -1,5 +1,59 @@
 # PearDrop Changelog
 
+## v0.27.0 (2026-09-17) - Share Reachability, Interrupted Downloads, Renaming
+
+**Cards now describe what is actually happening, rather than what was assumed.**
+
+> Note: the changelog was not kept between v0.19.1 and v0.26.0. This entry
+> covers v0.27.0 only; the gap is acknowledged rather than back-filled from
+> memory.
+
+### Features
+- **Initiating -> Active** — a share stays amber until its DHT topic is
+  genuinely announced. It previously claimed "Active" up to 11s before any
+  peer could reach it. "Not reachable" after 5 minutes without an announce.
+- **Interrupted downloads are an ordinary card state**, not an overlay panel:
+  "Disconnected at N%" with resume and cancel inline. The overlay hid the
+  name, size and progress needed to choose between them.
+- **Share lost** replaces the incorrect "Files removed" when a drive's
+  Corestore is gone. The user's files are usually untouched — only the share
+  and its link died. Offers Share (rebuild, new link) and Clear.
+- **Per-drive rename** from the card menu. Stored locally, never sent to
+  peers, never written to drives-state.json, and cleared with the drive.
+- **List search** across displayed name, original name and the names of files
+  inside a folder. A folder's file count and its contents follow the query.
+- **Receive modal**: Paste / Download / Clear as one button; links are
+  extracted from surrounding text and un-wrapped; your own or already-held
+  links are reported before you commit, not after.
+- Multi-file shares display as "Folder".
+
+### Fixes
+- **Restored `findingPeers()` on both receive paths.** Without it
+  `drive.update({ wait: true })` resolved against an empty metadata core, so
+  a synced share could read as empty, persist a 0-file entry and announce
+  itself as seeding.
+- **Subscribed `upload-complete`.** The event was emitted end to end and
+  nothing listened, so a share's upload speed was never cleared.
+- **Direction is no longer inferred from speed** — an upload on a re-seeded
+  drive was labelled "Downloading" with no progress.
+- Boot-time resume failures are applied on first paint; main had always sent
+  them and the renderer never read them.
+- "Files removed" is driven by a real file-existence check for the first time.
+- Restored downloads park instead of auto-resuming; the decision is user
+  intent, not a 20s wall-clock window.
+- Stall watchdog now covers the file-listing phase, so a dead sender fails in
+  60s instead of hanging on "Downloading" forever.
+- Closed context menus no longer occupy layout, which was making the list
+  jump when one was opened at the bottom.
+- Reachability survives a UI refresh.
+
+### Known gaps
+- **Pause is not implemented.** A dropped transfer is reported honestly but
+  not stopped; resuming needs an engine-side hook.
+- Not tested across two machines; verified by syntax checks and local runs.
+- `removeDriveEntry` deletes storage before saving the manifest — the crash
+  window that can orphan a Corestore folder.
+
 ## v0.19.1 (2026-05-15) - Bulletproof Manifest Recovery & Deduplication Fixes 🔧
 
 **Robust manifest recovery system and improved drive deduplication**

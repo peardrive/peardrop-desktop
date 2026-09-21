@@ -1,6 +1,6 @@
 {
   "name": "peardrop",
-  "version": "0.26.0",
+  "version": "0.27.0",
   "description": "Simple, elegant P2P file sharing using pearcore",
   "main": "main.js",
   "type": "commonjs",
