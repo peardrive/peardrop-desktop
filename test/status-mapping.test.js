@@ -9,7 +9,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { STATE_TO_STATUS, deriveStatus } = require('../lib/status-mapping');
+const { STATE_TO_STATUS, deriveStatus } = require('../src/lib/status-mapping');
 
 // Sanity on the exported map ----------------------------------------------
 

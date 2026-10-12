@@ -37,6 +37,8 @@
  * 'peer-connected' - { driveId, peerId }
  * 'peer-disconnected' - { driveId, peerId }
  * 'upload-progress' - { driveId, peerId, percent, bytesTransferred... }
+ * 'share-started' - { driveId, clientJobId, name, filesTotal, bytesTotal }
+ *                     once, before any share-progress
  * 'share-progress' - { driveId, filesDone, filesTotal, bytesDone,
  *                      bytesTotal, currentFile } during createDrive
  * 'upload-complete' - { driveId, peerId, totalBytes, duration }
@@ -217,6 +219,21 @@ class HyperdriveManager extends EventEmitter {
     const drivePath = path.join(this.drivesDir, driveId)
     
     console.log('[HyperdriveManager] Creating drive', { driveId, fileCount: files.length })
+
+    // SACRED-ADJACENT: announcement only, exactly like the share-progress
+    // emits below. Nothing downstream reads it and createDrive behaves
+    // identically without it.
+    // Why it exists: the renderer only learned a driveId when createDrive
+    // RESOLVED, so with two builds running it could not tell whose progress
+    // event was whose. clientJobId is an opaque token the caller passes in
+    // and gets handed straight back, so it can match the two up.
+    this.emit('share-started', {
+      driveId,
+      clientJobId: options.clientJobId || null,
+      name: options.name || null,
+      filesTotal: files.length,
+      bytesTotal: options.totalBytes || 0
+    })
     
     // Create isolated Corestore session for this drive
     const store = new Corestore(drivePath)

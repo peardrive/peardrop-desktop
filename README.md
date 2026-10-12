@@ -7,17 +7,17 @@ No accounts. No limits. No bullshit. Just drop a file, get a link, send it to wh
 ## 📸 See It In Action
 
 <div align="center">
-  <img src="screenshots/main-interface.png" alt="PearDrop Main Interface" width="45%" />
-  <img src="screenshots/sharing-files.png" alt="Sharing Files" width="45%" />
+  <img src="assets/screenshots/main-interface.png" alt="PearDrop Main Interface" width="45%" />
+  <img src="assets/screenshots/sharing-files.png" alt="Sharing Files" width="45%" />
 </div>
 
 <div align="center">
-  <img src="screenshots/download-progress.png" alt="Download Progress" width="45%" />
-  <img src="screenshots/share-info.png" alt="Share Information" width="45%" />
+  <img src="assets/screenshots/download-progress.png" alt="Download Progress" width="45%" />
+  <img src="assets/screenshots/share-info.png" alt="Share Information" width="45%" />
 </div>
 
 <div align="center">
-  <img src="screenshots/expanded-view.png" alt="Expanded View" width="60%" />
+  <img src="assets/screenshots/expanded-view.png" alt="Expanded View" width="60%" />
 </div>
 
 ---

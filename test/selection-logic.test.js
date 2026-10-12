@@ -18,7 +18,7 @@ const {
     primaryLabel,
     toggleAll,
     toggleOne,
-} = require('../lib/selection-logic');
+} = require('../src/lib/selection-logic');
 
 const FILES = [
     { name: 'a.txt', size: 100 },

@@ -1,7 +1,7 @@
 /**
  * MODULE: main.js (PearDrop v2)
  * PURPOSE: Electron main process for PearDrop - P2P file sharing
- * VERSION: 0.27.0
+ * VERSION: 0.28.0
  * EXPORTS: None (entry point)
  * FUNCTIONS:
  * createWindow() - Creates main BrowserWindow with platform-aware styling
@@ -38,6 +38,7 @@
  * 'peer-connected' - Peer joined (upload) or download starting
  * 'peer-disconnected' - Peer left
  * 'upload-progress' - Transfer progress update
+ * 'share-started' - Build began; carries driveId + clientJobId
  * 'share-progress' - Per-file progress while a share is being built
  * 'upload-complete' - Transfer finished
  * 'files-downloaded' - Download complete with file list
@@ -78,7 +79,7 @@ const { formatBytes, formatSpeed, normalizeUserPath } = require('./lib/file-util
 const { EngineError } = require('./lib/engine-errors');
 // Debug logging
 const { createLogger, loadConfig: loadDebugConfig, setDebug, isDebugEnabled,
-        initFileLogging, attachConsoleMirror, getLogPath,
+        initFileLogging, attachConsoleMirror, getLogPath, LOG_DIR,
         flushNow: flushLog } = require('./lib/logger');
 const log = createLogger('PearDrop');
 
@@ -218,7 +219,9 @@ function createWindow() {
     mainWindow = new BrowserWindow(windowOptions);
 
     // Load main interface
-    mainWindow.loadFile('index.html');
+    // join(__dirname, …): loadFile resolves a bare relative path against the
+    // working directory, not against this file.
+    mainWindow.loadFile(join(__dirname, 'index.html'));
 
     mainWindow.once('ready-to-show', () => {
         mainWindow.show();
@@ -311,19 +314,84 @@ function setupIPC() {
                 }
             });
 
-            const result = await hyperdriveManager.createDrive(safeFiles, {
+            // FLATTEN FOLDERS. get-files-stats returns a dropped folder as a
+            // single { type:'folder', path:<the directory>, contents:[...] }
+            // entry, and nothing was unpacking it — createDrive would stat the
+            // directory and open a read stream on it, which is EISDIR.
+            // The contents already carry { name, path, size, relativePath },
+            // the exact shape the CLI hands over (collectFilesRecursive in
+            // bin/peardrop), so createDrive's contract is unchanged. Unlike
+            // the CLI this skips nothing: dotfiles and node_modules are
+            // shared too, by request.
+            // A share is a flat GROUP OF FILES, not a directory tree. Sub-
+            // folders are dissolved: everything lands at the root of the
+            // share, which is what the list already shows and what the
+            // receiver now gets on disk.
+            //
+            // De-duplication is not optional here. Two files called a.txt in
+            // different subfolders would both be written to /a.txt and the
+            // second would silently replace the first — the share would be
+            // short a file with nothing to show for it. Second and later
+            // collisions become "a (2).txt".
+            // Keyed lower-case: Windows and macOS treat A.TXT and a.txt as the
+            // same file, so a case-sensitive check would pass both through and
+            // leave the receiver to rename one itself — giving it a name the
+            // card here never shows. The returned name keeps its original case.
+            const usedNames = new Set();
+            const take = (n) => { usedNames.add(n.toLowerCase()); return n; };
+            const flatName = (raw) => {
+                const base = path.basename(raw || 'file');
+                if (!usedNames.has(base.toLowerCase())) return take(base);
+                const ext = path.extname(base);
+                const stem = path.basename(base, ext);
+                let n = 2, candidate;
+                do { candidate = stem + ' (' + (n++) + ')' + ext; }
+                while (usedNames.has(candidate.toLowerCase()));
+                return take(candidate);
+            };
+
+            const expandedFiles = [];
+            for (const f of safeFiles) {
+                if (f && f.type === 'folder' && Array.isArray(f.contents)) {
+                    for (const c of f.contents) {
+                        const name = flatName(c.name);
+                        expandedFiles.push({
+                            name,
+                            path: normalizeUserPath(c.path),
+                            size: c.size,
+                            // Flat on purpose: no directory part, so createDrive
+                            // writes it at the root of the share.
+                            relativePath: name
+                        });
+                    }
+                } else if (f) {
+                    const name = flatName(f.name);
+                    expandedFiles.push({ ...f, name, relativePath: name });
+                }
+            }
+            if (expandedFiles.length === 0) {
+                return { success: false, error: 'Nothing to share — the folder is empty' };
+            }
+
+            const result = await hyperdriveManager.createDrive(expandedFiles, {
                 ttlMs: options.ttlMs || 0,
                 name: options.name,
+                // Opaque; echoed back in share-started so the renderer can
+                // match this build to the row it already drew.
+                clientJobId: options.clientJobId || null,
                 // Denominator for the 'share-progress' percentage. Additive
                 // only — createDrive ignores it apart from echoing it back
                 // in the progress payload.
-                totalBytes: safeFiles.reduce((sum, f) => sum + (f.size || 0), 0)
+                totalBytes: expandedFiles.reduce((sum, f) => sum + (f.size || 0), 0)
             });
             
             console.log('[PearDrop] Share created:', result.shareLink);
 
-            // Calculate total bytes from files
-            const totalBytes = safeFiles.reduce((sum, f) => sum + (f.size || 0), 0);
+            // Totals and the file list come from the EXPANDED set. Built from
+            // safeFiles, a dropped folder was persisted as a single entry
+            // named after the directory, so the card and the folder modal had
+            // one row for the whole share.
+            const totalBytes = expandedFiles.reduce((sum, f) => sum + (f.size || 0), 0);
             const shareName = options.name || (safeFiles.length === 1 ? safeFiles[0].name : 'Folder');
 
             // Add to drives state (single source of truth for UI)
@@ -332,7 +400,7 @@ function setupIPC() {
                 key: result.key,
                 shareLink: result.shareLink,
                 name: shareName,
-                files: safeFiles.map(f => ({
+                files: expandedFiles.map(f => ({
                     name: f.name,
                     path: f.path,
                     size: f.size
@@ -356,7 +424,15 @@ function setupIPC() {
                 success: true,
                 driveId: result.driveId,
                 shareLink: result.shareLink,
-                driveEntryId: driveEntry.id
+                driveEntryId: driveEntry.id,
+                // The names actually written, after flattening and de-duping.
+                // Without this the card would still list the originals and
+                // disagree with the share for every renamed collision.
+                files: expandedFiles.map(f => ({
+                    name: f.name,
+                    path: f.path,
+                    size: f.size
+                }))
             };
         } catch (error) {
             if (error && error.cancelled) {
@@ -582,6 +658,16 @@ function setupIPC() {
             const entry = hyperdriveManager.manifest?.drives?.[driveId];
             if (!entry) {
                 console.log('[PearDrop] Cancel during connecting phase — no entry to clean up', { driveId });
+                // Nothing to delete, but the renderer is still showing the
+                // card under a "Cancelling…" overlay that only clears on
+                // 'removed'. Returning success without it left the row stuck
+                // there for good. Also drop the id: there is no loop left to
+                // tell it was cancelled, and holding it would mark a later
+                // download reusing that id as already-cancelled.
+                cancelledDownloads.delete(driveId);
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('drives-updated', { action: 'removed', id: driveId });
+                }
                 return { success: true };
             }
             try {
@@ -590,12 +676,18 @@ function setupIPC() {
                     deleteFiles: true,
                     deleteStorage: false
                 });
-                if (removed && mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('drives-updated', { action: 'removed', id: driveId });
-                }
                 console.log('[PearDrop] Cancelled an already-finished download', { driveId, removed });
             } catch (err) {
                 console.warn('[PearDrop] Post-completion cancel cleanup failed', err.message);
+            } finally {
+                // The card goes whatever happened to the entry. This used to
+                // be conditional on removeDriveEntry returning true, so a
+                // false return or a throw left the row stuck under the
+                // "Cancelling…" overlay, which only clears on 'removed'.
+                cancelledDownloads.delete(driveId);
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('drives-updated', { action: 'removed', id: driveId });
+                }
             }
         }
         return { success: true };
@@ -1181,11 +1273,17 @@ function setupIPC() {
     // ========================================================================
     ipcMain.handle('log-get-path', async () => getLogPath());
 
+    // openPath, not showItemInFolder: the latter returns void and on Windows
+    // routinely opens Explorer behind the app window or not at all, so the
+    // handler reported success whether or not anything appeared. openPath
+    // resolves to an error string we can actually surface. Only cost is that
+    // the file is not pre-selected — the folder holds nothing else.
     ipcMain.handle('log-reveal', async () => {
         try {
             flushLog();                      // don't reveal a stale file
-            shell.showItemInFolder(getLogPath());
-            return { success: true };
+            const err = await shell.openPath(LOG_DIR);
+            if (err) return { success: false, error: err };
+            return { success: true, path: getLogPath() };
         } catch (err) {
             return { success: false, error: err.message };
         }
@@ -1408,6 +1506,15 @@ app.whenReady().then(async () => {
         // Share-build progress — emitted per file while createDrive() writes
         // the selected files into the drive. Distinct from 'upload-progress',
         // which is about peers downloading an already-built share.
+        // Fires once per build, before any progress. Carries the driveId and
+        // the caller's clientJobId so the renderer can route the progress
+        // events that follow to the right job.
+        hyperdriveManager.on('share-started', (data) => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('share-started', data);
+            }
+        });
+
         hyperdriveManager.on('share-progress', (data) => {
             if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send('share-progress', {

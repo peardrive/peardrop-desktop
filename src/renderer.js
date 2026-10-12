@@ -1,7 +1,7 @@
 /**
  * MODULE: renderer.js (PearDrop v2)
  * PURPOSE: PearDrop UI - Integrated ScrollList + DriveItem with PearCore backend
- * VERSION: 0.27.0
+ * VERSION: 0.28.0
  * 
  * ARCHITECTURE:
  *   - Uses ScrollList v2 slot-based system
@@ -20,8 +20,13 @@
  *   - openRenameModal / closeRenameModal — Rename (local alias)
  *
  * WINDOW-EXPOSED CONTROLLERS:
- *   - shareProgress { begin, finish, fail } — drives Send-modal State C
- *     and the bottom-right pill from the 'share-progress' IPC event
+ *   - shareProgress { begin, finish, fail, list, isActive } — drives
+ *     Send-modal State C and the bottom-right pill. One job per build:
+ *     begin(files, name) returns a jobId, passed to the backend as
+ *     clientJobId and handed back by 'share-started' so 'share-progress'
+ *     events can be routed. finish(jobId, link) returns false while other
+ *     builds are still running. yieldForNewFiles() demotes State C to the
+ *     pill so freshly dropped files are visible
  * 
  * LAYOUT:
  *   - Header: Profile icon (top-left)
@@ -41,6 +46,7 @@
  *   - drivesList, drivesPause, drivesResume, drivesRemove, driveGet
  *   - openDownloads, openFile, showFileInFolder, getFilesStats
  *   - getDebug, setDebug
+ *   - getLogPath, revealLog, readLogTail — Report a bug diagnostics
  * 
  * IPC LISTENERS:
  *   - onPeerConnected, onPeerDisconnected
@@ -697,6 +703,31 @@ function getPresetForDrive(drive) {
 // DROP ZONE
 // ============================================================================
 
+// Drop a file ANYWHERE in the window and the Send modal opens with it.
+//
+// This also has to exist for a second reason: without it Electron navigates
+// the window to the dropped file, replacing the whole app UI until restart.
+// Targets that handle their own drop (the Add Files card, the legacy drop
+// zone) call stopPropagation, so they never reach this.
+function bindGlobalDropGuard() {
+    document.addEventListener('dragover', (e) => e.preventDefault());
+    document.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const files = Array.from(e.dataTransfer?.files || []);
+        if (!files.length) return;
+        // Open first, then hand the files over: openSendModal renders from
+        // the CURRENT activeFiles, and handleFiles is async. The modal is
+        // already listening for activefiles-changed, so it repaints itself
+        // into State B the moment the stats come back.
+        // Step aside from State C first, or the modal reopens straight onto
+        // the progress screen and the dropped files are never shown.
+        window.shareProgress?.yieldForNewFiles?.();
+        window.openSendModal?.();
+        handleFiles(files);
+    });
+}
+bindGlobalDropGuard();
+
 function bindDropZone() {
     dropZone.addEventListener('click', selectFiles);
     dropZone.addEventListener('dragover', handleDragOver);
@@ -737,6 +768,9 @@ function handleDragLeave(e) {
 
 function handleDrop(e) {
     e.preventDefault();
+    // Handled here — do not also let the document-level handler open the
+    // Send modal and read the same files a second time.
+    e.stopPropagation();
     dropZone.classList.remove('drag-over');
     
     const files = Array.from(e.dataTransfer.files);
@@ -920,46 +954,65 @@ function handleScannedLink(text) {
 async function startShare() {
     if (activeFiles.length === 0) return;
 
+    // SNAPSHOT. Everything below must work off this array, never activeFiles:
+    // the user can drop new files while this build runs, and reading the live
+    // selection later would share the wrong thing, clear the wrong thing, or
+    // size the progress bar against a set that no longer exists.
+    const files = activeFiles.slice();
+    const shareName = files.length === 1
+        ? files[0].name
+        : 'Folder';   // placeholder; see note in hyperdrive-manager.createDrive
+
     shareBtn.disabled = true;
     shareBtn.classList.remove('is-ready');
     shareBtn.textContent = 'SHARING...';
-    
+
     // Show build progress — in the Send modal if it's open, otherwise as
-    // the bottom-right pill. Totals come from activeFiles, which already
-    // carry per-file sizes.
-    window.shareProgress?.begin(activeFiles);
+    // the bottom-right pill. Returns the id this build is tracked under;
+    // the backend echoes it back so progress events can be routed.
+    const jobId = window.shareProgress?.begin(files, shareName);
 
     try {
         // Must pass { files: [...], options: {} } - not just paths!
-        const shareName = activeFiles.length === 1 
-            ? activeFiles[0].name 
-            : 'Folder';   // placeholder; see note in hyperdrive-manager.createDrive
-        
         const result = await window.electronAPI.hyperdriveShare({
-            files: activeFiles,
-            options: { name: shareName }
+            files,
+            options: { name: shareName, clientJobId: jobId }
         });
-        
+
         if (result.success) {
             currentShareLink = result.shareLink;
             currentDriveId = result.driveId;
-            // Build finished — tear down progress, close Send, hand over to
-            // the Share Link modal. Same 760x520 shell, so this reads as a
-            // content swap rather than a second window.
-            window.shareProgress?.finish();
-            showShareModal(result.shareLink);
-            
+
+            // finish() returns false while OTHER builds are still running —
+            // the Send modal has to stay put and keep showing them. Opening
+            // the Share Link modal then would close it out from under them.
+            const allDone = window.shareProgress?.finish(jobId, result.shareLink);
+            if (allDone !== false) showShareModal(result.shareLink);
+
             // Add to list but park it invisibly — the share-link modal is on
             // top, so the user shouldn't see the new item peeking through the
             // modal's backdrop blur. deferAnimation pre-collapses the slot;
             // closeShareModal() will play the entrance once the modal is gone.
             pendingShareAnimationId = result.driveId;
+            // Same flattening as main: a dropped folder is ONE entry in
+            // activeFiles but N files in the drive. Counting the entries gave
+            // the card "1 file" for a whole folder and an empty folder modal.
+            // main returns the names it actually wrote — already flattened
+            // and de-duplicated. Use those, so a collision renamed to
+            // "a (2).txt" reads the same here as it does for the receiver.
+            // The flatMap is only a fallback for an older main.
+            const listedFiles = Array.isArray(result.files) && result.files.length
+                ? result.files
+                : files.flatMap(f =>
+                    (f.type === 'folder' && Array.isArray(f.contents))
+                        ? f.contents.map(c => ({ name: c.name, size: c.size, path: c.path }))
+                        : [{ name: f.name, size: f.size, path: f.path }]);
             addDriveToList({
                 id: result.driveId,
                 title: shareName,
-                size: activeFiles.reduce((sum, f) => sum + (f.size || 0), 0),
-                fileCount: activeFiles.length,
-                files: activeFiles.map(f => ({ name: f.name, size: f.size, path: f.path })),
+                size: files.reduce((sum, f) => sum + (f.size || 0), 0),
+                fileCount: listedFiles.length,
+                files: listedFiles,
                 // Not 'sharing' yet: the drive exists but its DHT announce
                 // has not landed, so the link works for nobody. markAnnounced
                 // promotes it; the watchdog fails it if it never arrives.
@@ -968,20 +1021,22 @@ async function startShare() {
                 type: 'share',
                 shareLink: result.shareLink
             }, { deferAnimation: true });
-            
-            // Clear drop zone after successful share
-            clearFiles();
+
+            // Clear the drop zone ONLY if it still holds what we just shared.
+            // If the user staged something new mid-build, clearing would throw
+            // their selection away.
+            if (sameSelection(activeFiles, files)) clearFiles();
         } else if (result.cancelled) {
             // User pressed Cancel — expected, not a failure.
-            window.shareProgress?.fail(null);
+            window.shareProgress?.fail(jobId, null);
             showToast('Share cancelled', 'info');
         } else {
-            window.shareProgress?.fail(result.error || 'Share failed');
+            window.shareProgress?.fail(jobId, result.error || 'Share failed');
             showToast(result.error || 'Share failed', 'error');
         }
     } catch (err) {
         console.error('Share error:', err);
-        window.shareProgress?.fail(err.message);
+        window.shareProgress?.fail(jobId, err.message);
         showToast('Share failed: ' + err.message, 'error');
     } finally {
         shareBtn.textContent = 'SHARE';
@@ -993,6 +1048,13 @@ async function startShare() {
         shareBtn.disabled = !hasFiles;
         shareBtn.classList.toggle('is-ready', hasFiles);
     }
+}
+
+// Same files, same order? Used to decide whether clearing the drop zone
+// after a share would discard a selection the user made while it ran.
+function sameSelection(a, b) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((f, i) => f && b[i] && f.path === b[i].path);
 }
 
 async function startDownload() {
@@ -3175,7 +3237,10 @@ function getFileIcon(filename) {
         // Images
         jpg: '🖼️', jpeg: '🖼️', png: '🖼️', gif: '🖼️', webp: '🖼️', svg: '🖼️',
         // Video
-        mp4: '🎬', mov: '🎬', avi: '🎬', mkv: '🎬', webm: '🎬',
+        // .ts is ambiguous — MPEG transport stream or TypeScript. In a
+        // file-sharing app it is video far more often, and it was landing
+        // in the code group and rendering as a gear.
+        mp4: '🎬', mov: '🎬', avi: '🎬', mkv: '🎬', webm: '🎬', ts: '🎬', m2ts: '🎬',
         // Audio
         mp3: '🎵', wav: '🎵', ogg: '🎵', flac: '🎵', m4a: '🎵',
         // Documents
@@ -3183,7 +3248,7 @@ function getFileIcon(filename) {
         // Archives
         zip: '📦', rar: '📦', '7z': '📦', tar: '📦', gz: '📦',
         // Code
-        js: '⚙️', ts: '⚙️', py: '🐍', html: '🌐', css: '🎨', json: '📋'
+        js: '⚙️', py: '🐍', html: '🌐', css: '🎨', json: '📋'
     };
     return icons[ext] || '📄';
 }
@@ -4196,7 +4261,13 @@ setActivePage('allshares');
     window.openSendModal  = openSendModal;
     window.closeSendModal = closeSendModal;
 
-    if (sendBtn) sendBtn.addEventListener('click', openSendModal);
+    if (sendBtn) sendBtn.addEventListener('click', () => {
+        // Pressing Send during a build means "I want to send something
+        // else", so step aside from the progress screen. Deliberately not
+        // inside openSendModal: the pill calls that to go BACK to State C.
+        window.shareProgress?.yieldForNewFiles?.();
+        openSendModal();
+    });
     if (sendModalClose) sendModalClose.addEventListener('click', closeSendModal);
     if (sendModalOverlay) {
         sendModalOverlay.addEventListener('click', (e) => {
@@ -4212,6 +4283,38 @@ setActivePage('allshares');
             // force: the picker must reopen even when files are already
             // staged, so the card can add more.
             if (typeof selectFiles === 'function') selectFiles({ force: true });
+        });
+
+        // The card said "Drag and Drop here" but only listened for clicks.
+        // handleFiles ends in updateDropZone, which fires activefiles-changed,
+        // which re-renders the modal into State B — so a drop needs nothing
+        // beyond handing the files over.
+        //
+        // depth counter: dragleave also fires when the pointer crosses onto a
+        // CHILD of the card (the icon, the text), so a plain leave-clears-it
+        // makes the highlight strobe as you move across.
+        let dragDepth = 0;
+        const setDragOver = (on) => sendAddFilesCard.classList.toggle('drag-over', on);
+
+        sendAddFilesCard.addEventListener('dragenter', (e) => {
+            e.preventDefault();
+            dragDepth++;
+            setDragOver(true);
+        });
+        sendAddFilesCard.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+        });
+        sendAddFilesCard.addEventListener('dragleave', () => {
+            if (--dragDepth <= 0) { dragDepth = 0; setDragOver(false); }
+        });
+        sendAddFilesCard.addEventListener('drop', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dragDepth = 0;
+            setDragOver(false);
+            const files = Array.from(e.dataTransfer?.files || []);
+            if (files.length && typeof handleFiles === 'function') handleFiles(files);
         });
     }
 
@@ -4591,8 +4694,8 @@ setActivePage('allshares');
     }
 
     // Report a bug page — reached from Settings → Report a bug row.
-    // Back arrow returns to Settings. Send Report currently just shows
-    // a confirmation toast (no backend endpoint wired yet).
+    // Back arrow returns to Settings. Send Report is disabled (no backend);
+    // the diagnostics-log buttons are what actually works.
     const reportBugPage = document.getElementById('reportBugPage');
     const reportBugBackBtn = document.getElementById('reportBugBackBtn');
     const settingsReportBugBtn = document.getElementById('settingsReportBugBtn');
@@ -4601,6 +4704,9 @@ setActivePage('allshares');
     const bugTagVersion = document.getElementById('bugTagVersion');
     const bugTagOS = document.getElementById('bugTagOS');
     const bugSendReportBtn = document.getElementById('bugSendReportBtn');
+    const bugShowLogBtn = document.getElementById('bugShowLogBtn');
+    const bugCopyLogBtn = document.getElementById('bugCopyLogBtn');
+    const bugLogPathEl = document.getElementById('bugLogPath');
 
     function openReportBugPage() {
         if (!reportBugPage) return;
@@ -4641,20 +4747,59 @@ setActivePage('allshares');
         bugTagOS.textContent = os;
     }
 
-    // Send Report — MVP just closes the page + shows a confirmation
-    // toast. Real submission endpoint TBD (see mockup screen 10 for
-    // the follow-up "Report sent" confirmation state).
-    if (bugSendReportBtn) {
-        bugSendReportBtn.addEventListener('click', () => {
-            closeReportBugPage();
-            if (bugDescription) bugDescription.value = '';
-            if (bugCharCount) bugCharCount.textContent = '0';
-            const locInput = document.getElementById('bugLocation');
-            if (locInput) locInput.value = '';
-            if (typeof showToast === 'function') {
-                showToast('Report sent — thanks for the feedback', 'success');
+    // Send Report is disabled in index.html — there is no submission
+    // endpoint. It previously cleared the form and toasted "Report sent",
+    // which told the user their report had gone somewhere. Until a backend
+    // exists the log buttons below are the real path. No handler here on
+    // purpose: a disabled button fires no click.
+    void bugSendReportBtn;
+
+    // Show the log file — reveals it in Explorer/Finder so it can be dragged
+    // into a chat. main.js flushes the write buffer before revealing.
+    if (bugShowLogBtn && window.electronAPI?.revealLog) {
+        bugShowLogBtn.addEventListener('click', async () => {
+            try {
+                const res = await window.electronAPI.revealLog();
+                if (!res?.success) {
+                    showToast(res?.error || 'Could not open the log folder', 'error');
+                }
+            } catch (err) {
+                showToast('Could not open the log folder', 'error');
             }
         });
+    } else if (bugShowLogBtn) {
+        bugShowLogBtn.disabled = true;
+    }
+
+    // Copy the tail — 300 lines is what fits a chat message and still covers
+    // the run-up to a failure. The file itself can be megabytes.
+    if (bugCopyLogBtn && window.electronAPI?.readLogTail) {
+        bugCopyLogBtn.addEventListener('click', async () => {
+            const original = bugCopyLogBtn.textContent;
+            try {
+                const res = await window.electronAPI.readLogTail(300);
+                if (!res?.success || !res.text) {
+                    showToast(res?.error || 'Could not read the log', 'error');
+                    return;
+                }
+                await navigator.clipboard.writeText(res.text);
+                bugCopyLogBtn.textContent = 'Copied!';
+                setTimeout(() => { bugCopyLogBtn.textContent = original; }, 2000);
+            } catch (err) {
+                showToast('Could not copy the log', 'error');
+            }
+        });
+    } else if (bugCopyLogBtn) {
+        bugCopyLogBtn.disabled = true;
+    }
+
+    // Show where the file lives, so it can be found without the button too.
+    if (bugLogPathEl && window.electronAPI?.getLogPath) {
+        window.electronAPI.getLogPath()
+            .then((logPath) => {
+                if (typeof logPath === 'string') bugLogPathEl.textContent = logPath;
+            })
+            .catch(() => { /* leave it blank */ });
     }
 
     // ─── File Info Modal (Desktop v2, Figma screen #19) ─────────────
@@ -5573,6 +5718,9 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
     const percentEl    = document.getElementById('sendProgressPercent');
     const ringEl       = document.getElementById('sendProgressRing');
     const statsEl      = document.getElementById('sendProgressStats');
+    const progressEl   = document.getElementById('sendProgress');
+    const titleEl      = document.getElementById('sendProgressTitle');
+    const listEl       = document.getElementById('sendProgressList');
 
     // Stat blocks are built once per share, then only their values are
     // written. Rebuilding the markup on every progress event would throw
@@ -5616,31 +5764,83 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
 
     const fmt = (n) => window.PearUtils.formatBytes(n || 0);
 
-    let active = false;       // a share is currently building
-    let backgrounded = false; // user explicitly chose the pill
-    let bytesTotal = 0;
-    let last = { bytesDone: 0, filesDone: 0, filesTotal: 0 };
-    // Rolling throughput for the time-left estimate. Sampled rather than
-    // instantaneous so a slow chunk doesn't make the ETA jump around.
-    let currentDriveId = null;   // learned from the first progress event
-    let rateAnchor = null;   // { t, bytes }
-    let bytesPerSec = 0;
+    // ── Jobs ──────────────────────────────────────────────────────────
+    // One entry per build in flight. This used to be a single set of
+    // variables, so starting a second share wiped the first one's totals and
+    // both builds wrote into the same display — the rapid flicker between two
+    // progresses. Cancel was hit too: it targeted whichever drive had
+    // reported most recently, not the one you clicked.
+    //
+    // Routing: begin() mints a jobId, passes it to the backend as
+    // clientJobId, and 'share-started' hands it back alongside the real
+    // driveId. Progress events only carry driveId, hence the second index.
+    const jobs = new Map();        // jobId  -> job
+    const byDriveId = new Map();   // driveId -> job
 
-    function updateRate(bytesDone) {
+    let jobSeq = 0;
+    let backgrounded = false;      // user explicitly chose the pill
+    // True once a batch has held more than one job. A solo share keeps the
+    // old ending (close, hand over to the Share Link modal); a batch stays
+    // open so every finished row can be copied.
+    let batchMultiple = false;
+    // Every job in a multi-share batch has finished, and the rows are being
+    // held on screen so their links can be copied. No build is running, so
+    // isActive() is false — State C has to stay up on this flag instead.
+    let batchSettled = false;
+
+    function newJob(files, name) {
+        const list = files || [];
+        return {
+            id: 'job_' + (++jobSeq) + '_' + Date.now(),
+            driveId: null,
+            name: name || (list.length === 1 ? list[0].name : 'Folder'),
+            state: 'building',     // building | done | failed
+            shareLink: null,
+            bytesTotal: list.reduce((sum, f) => sum + (f.size || 0), 0),
+            bytesDone: 0,
+            filesDone: 0,
+            filesTotal: list.length,
+            currentFile: null,
+            // Rolling throughput, per job — a shared anchor would make every
+            // job's ETA jump whenever any other one advanced.
+            rateAnchor: null,
+            bytesPerSec: 0
+        };
+    }
+
+    const building = () => [...jobs.values()].filter(j => j.state === 'building');
+
+    // Totals across every job still on screen, finished ones included: a
+    // finished share should not make the combined bar jump backwards.
+    function totals() {
+        const all = [...jobs.values()];
+        return {
+            bytesTotal: all.reduce((n, j) => n + j.bytesTotal, 0),
+            bytesDone:  all.reduce((n, j) => n + j.bytesDone, 0),
+            filesTotal: all.reduce((n, j) => n + j.filesTotal, 0),
+            filesDone:  all.reduce((n, j) => n + j.filesDone, 0),
+            bytesPerSec: all.reduce((n, j) => n + j.bytesPerSec, 0)
+        };
+    }
+
+    const isActive = () => building().length > 0;
+
+    function updateRate(job, bytesDone) {
         const now = Date.now();
-        if (!rateAnchor) { rateAnchor = { t: now, bytes: bytesDone }; return; }
-        const dt = now - rateAnchor.t;
+        if (!job.rateAnchor) { job.rateAnchor = { t: now, bytes: bytesDone }; return; }
+        const dt = now - job.rateAnchor.t;
         if (dt < 700) return;                       // sample window
-        const inst = ((bytesDone - rateAnchor.bytes) * 1000) / dt;
+        const inst = ((bytesDone - job.rateAnchor.bytes) * 1000) / dt;
         // Smooth toward the new reading instead of snapping to it.
-        bytesPerSec = bytesPerSec ? (bytesPerSec * 0.6 + inst * 0.4) : inst;
-        rateAnchor = { t: now, bytes: bytesDone };
+        job.bytesPerSec = job.bytesPerSec ? (job.bytesPerSec * 0.6 + inst * 0.4) : inst;
+        job.rateAnchor = { t: now, bytes: bytesDone };
     }
 
     function etaText() {
-        if (!bytesPerSec || bytesTotal <= 0) return 'Estimating';
-        const left = Math.max(0, bytesTotal - last.bytesDone);
-        const secs = Math.round(left / bytesPerSec);
+        const t = totals();
+        if (!t.bytesPerSec || t.bytesTotal <= 0) return 'Estimating';
+        const left = Math.max(0, t.bytesTotal - t.bytesDone);
+        const secs = Math.round(left / t.bytesPerSec);
         if (secs < 1) return 'Almost done';
         if (secs < 60) return secs + 's';
         const m = Math.floor(secs / 60);
@@ -5650,61 +5850,337 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
 
     // Pill shows whenever a build is running and the modal isn't on screen.
     function syncSurfaces() {
+        const active = isActive();
         const modalOpen = !!modalOverlay?.classList.contains('active');
-        const showPill = active && (backgrounded || !modalOpen);
-        pill?.classList.toggle('is-visible', showPill);
-        modalInner?.classList.toggle('is-sharing', active && modalOpen && !backgrounded);
+        // Pill is for work in flight only — a settled batch has nothing left
+        // to report and belongs in the modal.
+        pill?.classList.toggle('is-visible', active && (backgrounded || !modalOpen));
+        // Deliberately NOT gated on modalOpen. The overlay fades out over
+        // 110ms and stays displayed for it, so dropping .is-sharing the
+        // instant .active goes uncovers State A/B for the whole fade — a
+        // visible flash of the file picker on the way out. While the modal
+        // is closed the class is simply invisible, so leaving it on costs
+        // nothing and it is already correct on reopen.
+        modalInner?.classList.toggle('is-sharing',
+            (active || batchSettled) && !backgrounded);
+    }
+
+    // Drop every job and put the surface back to its resting state.
+    function resetBatch() {
+        clearThrottle();
+        hideQr();
+        jobs.clear();
+        byDriveId.clear();
+        batchMultiple = false;
+        batchSettled = false;
+        backgrounded = false;
+        listSig = '';
+        if (listEl) { listEl.innerHTML = ''; listEl.hidden = true; }
+        progressEl?.classList.remove('is-multi');
+        if (bgBtn) bgBtn.hidden = false;
+        if (cancelBtn) {
+            cancelBtn.disabled = false;
+            cancelBtn.textContent = 'Cancel';
+            cancelBtn.classList.remove('is-finish');
+        }
+        modalInner?.classList.remove('is-sharing');
+        if (barEl) barEl.style.width = '0%';
+        if (ringEl) ringEl.style.strokeDashoffset = String(RING_C);
     }
 
     function render() {
+        const t = totals();
         // Bytes when we have a real total, else fall back to file count.
         // The renderer's list can disagree with what createDrive actually
         // writes — sharing a folder is ONE entry here but N files there —
         // so a byte total of 0 must not pin the bar at 0 forever.
-        // filesDone/filesTotal come straight from createDrive's loop and
-        // are always correct.
         let pct = 0;
-        if (bytesTotal > 0) {
-            pct = Math.min(100, Math.round((last.bytesDone / bytesTotal) * 100));
-        } else if (last.filesTotal > 0) {
-            pct = Math.min(100, Math.round((last.filesDone / last.filesTotal) * 100));
+        if (t.bytesTotal > 0) {
+            pct = Math.min(100, Math.round((t.bytesDone / t.bytesTotal) * 100));
+        } else if (t.filesTotal > 0) {
+            pct = Math.min(100, Math.round((t.filesDone / t.filesTotal) * 100));
         }
         if (barEl) barEl.style.width = pct + '%';
         if (ringEl) ringEl.style.strokeDashoffset = String(RING_C * (1 - pct / 100));
         setNum(percentEl, String(pct));
-        setNum(pillPercent, pct + '%');
-        // Time left is shown for EVERY share, group or single. It used to be
-        // swapped out for the file count on a group, which is backwards: a
-        // 500-file transfer is exactly when you want to know how long.
-        setNum(statRefs.eta, etaText());
+
+        // Pill carries the job count once there is more than one, so the
+        // number on it is not mistaken for a single share's progress.
+        const n = building().length;
+        setNum(pillPercent, n > 1 ? n + ' shares · ' + pct + '%' : pct + '%');
+
+        setNum(statRefs.eta, batchSettled ? 'Finished!' : etaText());
         if (statRefs.files) {
-            setNum(statRefs.files, last.filesTotal
-                ? `${last.filesDone}/${last.filesTotal}`
-                : String(last.filesDone));
+            setNum(statRefs.files, t.filesTotal
+                ? `${t.filesDone}/${t.filesTotal}`
+                : String(t.filesDone));
         }
-        // Size gets its own stat block now, so it's just the value.
-        // bytesDone is always real (createDrive stats every file), so show
-        // it even when the total is unknown.
-        setNum(statRefs.size, bytesTotal > 0
-            ? `${fmt(last.bytesDone)} / ${fmt(bytesTotal)}`
-            : fmt(last.bytesDone));
+        setNum(statRefs.size, t.bytesTotal > 0
+            ? `${fmt(t.bytesDone)} / ${fmt(t.bytesTotal)}`
+            : fmt(t.bytesDone));
+
+        renderList();
+
+        // Headline. The no-longer-building case matters: once a job is done
+        // it drops out of building(), and reading currentFile off an empty
+        // list fell through to "Starting…" on a share that had finished.
+        if (titleEl) {
+            titleEl.textContent = batchSettled ? 'Ready to share' : 'Preparing your files';
+        }
+        if (fileEl) {
+            const one = building()[0];
+            if (n > 1) {
+                fileEl.textContent = n + ' shares building…';
+            } else if (one) {
+                fileEl.textContent = one.currentFile || 'Starting…';
+            } else {
+                const done = [...jobs.values()].filter(j => j.state === 'done');
+                fileEl.textContent = done.length === 1
+                    ? done[0].name
+                    : (done.length ? done.length + ' shares ready' : '—');
+            }
+        }
     }
 
-    function begin(files) {
-        active = true;
+    // ── List view ─────────────────────────────────────────────────────
+    // Rows are rebuilt only when the SHAPE changes (a job added, removed, or
+    // moving to done). Rebuilding on every progress tick would close an open
+    // QR panel under the cursor and reset a "Copied!" label mid-countdown.
+    let listSig = '';
+    const X_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+    const QR_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v3M14 20h3M20 20v.01"/></svg>';
+
+    const esc = (t) => String(t == null ? '' : t)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+    function jobPct(job) {
+        if (job.bytesTotal > 0) return Math.min(100, Math.round((job.bytesDone / job.bytesTotal) * 100));
+        if (job.filesTotal > 0) return Math.min(100, Math.round((job.filesDone / job.filesTotal) * 100));
+        return 0;
+    }
+
+    function rowHtml(job) {
+        const done = job.state === 'done';
+        const tail = done
+            ? `<div class="spr-qr-wrap">
+                   <button type="button" class="spr-icon-btn spr-qr" data-job="${job.id}" aria-label="Show QR code">${QR_SVG}</button>
+               </div>
+               <button type="button" class="spr-copy" data-job="${job.id}">Copy Link</button>`
+            : `<div class="spr-pct" data-pct="${job.id}">${jobPct(job)}%</div>
+               <button type="button" class="spr-icon-btn spr-cancel" data-job="${job.id}" aria-label="Cancel this share">${X_SVG}</button>`;
+
+        const body = done
+            ? '<div class="spr-sub">Ready to share</div>'
+            : `<div class="spr-bar"><div class="spr-bar-fill" data-fill="${job.id}" style="width:${jobPct(job)}%"></div></div>`;
+
+        return `<div class="send-progress-row${done ? ' is-done' : ''}" data-row="${job.id}">
+            <div class="spr-main">
+                <div class="spr-name">${esc(job.name)}</div>
+                ${body}
+            </div>
+            ${tail}
+        </div>`;
+    }
+
+    function renderList() {
+        if (!listEl || !progressEl) return;
+        const all = [...jobs.values()];
+        const multi = all.length > 1;
+        progressEl.classList.toggle('is-multi', multi);
+        listEl.hidden = !multi;
+        if (!multi) { listSig = ''; listEl.innerHTML = ''; return; }
+
+        const sig = all.map(j => j.id + ':' + j.state).join('|');
+        if (sig !== listSig) {
+            listSig = sig;
+            hideQr();                    // the button it was anchored to is gone
+            listEl.innerHTML = all.map(rowHtml).join('');
+            return;                      // fresh markup already carries values
+        }
+        // Same shape — patch the numbers in place.
+        for (const job of all) {
+            if (job.state !== 'building') continue;
+            const pct = jobPct(job);
+            const fill = listEl.querySelector(`[data-fill="${job.id}"]`);
+            if (fill) fill.style.width = pct + '%';
+            const pctEl = listEl.querySelector(`[data-pct="${job.id}"]`);
+            if (pctEl && pctEl.textContent !== pct + '%') pctEl.textContent = pct + '%';
+        }
+    }
+
+    // Delegated so the handlers survive every rebuild.
+    listEl?.addEventListener('click', async (e) => {
+        const cancelBtnEl = e.target.closest('.spr-cancel');
+        if (cancelBtnEl) {
+            const job = jobs.get(cancelBtnEl.dataset.job);
+            if (!job) return;
+            cancelBtnEl.disabled = true;
+            if (job.driveId) {
+                try {
+                    await window.electronAPI.hyperdriveShareCancel?.(job.driveId);
+                } catch (err) {
+                    console.error('[share] row cancel failed', job.driveId, err);
+                    cancelBtnEl.disabled = false;
+                }
+            }
+            // startShare's rejection path calls fail(jobId) and removes the row.
+            return;
+        }
+
+        const copyBtn = e.target.closest('.spr-copy');
+        if (copyBtn) {
+            const job = jobs.get(copyBtn.dataset.job);
+            if (!job?.shareLink) return;
+            try {
+                await navigator.clipboard.writeText(job.shareLink);
+                const original = copyBtn.textContent;
+                copyBtn.textContent = 'Copied!';
+                setTimeout(() => { copyBtn.textContent = original; }, 2000);
+            } catch (err) {
+                showToast('Could not copy the link', 'error');
+            }
+        }
+    });
+
+    // QR peek. Generated on first hover and cached on the job — building one
+    // for every finished row up front would be work nobody asked for.
+    const qrLayer = document.getElementById('sprQrLayer');
+    const qrLayerImg = qrLayer?.querySelector('img');
+    let qrForJob = null;
+
+    function hideQr() {
+        qrForJob = null;
+        qrLayer?.classList.remove('is-visible');
+    }
+
+    // Anchored to the button's live rect, clamped so a row near an edge
+    // cannot push the panel off screen.
+    function placeQr(btn) {
+        if (!qrLayer) return;
+        const r = btn.getBoundingClientRect();
+        const w = 148, h = 148, gap = 8;
+        let left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8));
+        let top = r.top - h - gap;
+        if (top < 8) top = r.bottom + gap;          // no room above, go below
+        qrLayer.style.left = left + 'px';
+        qrLayer.style.top = top + 'px';
+    }
+
+    listEl?.addEventListener('mouseover', async (e) => {
+        const btn = e.target.closest('.spr-qr');
+        if (!btn) return;
+        const job = jobs.get(btn.dataset.job);
+        if (!job?.shareLink || !qrLayer || !qrLayerImg) return;
+        if (qrForJob === job.id) return;
+        qrForJob = job.id;
+        try {
+            if (!job.qrDataUrl) job.qrDataUrl = await window.electronAPI.generateQr?.(job.shareLink);
+        } catch (err) {
+            console.error('[share] QR generation failed', err);
+            return;
+        }
+        // The pointer may have moved on while that await was in flight.
+        if (qrForJob !== job.id || !job.qrDataUrl) return;
+        qrLayerImg.setAttribute('src', job.qrDataUrl);
+        placeQr(btn);
+        qrLayer.classList.add('is-visible');
+    });
+
+    listEl?.addEventListener('mouseout', (e) => {
+        if (e.target.closest('.spr-qr')) hideQr();
+    });
+    // The layer is fixed, so anything that moves the button underneath it
+    // leaves it stranded: scrolling the list, resizing, or rebuilding rows.
+    listEl?.addEventListener('scroll', hideQr);
+    window.addEventListener('resize', hideQr);
+
+    function begin(files, name) {
+        const job = newJob(files, name);
+        jobs.set(job.id, job);
+        if (jobs.size > 1) batchMultiple = true;
         backgrounded = false;
-        bytesTotal = (files || []).reduce((sum, f) => sum + (f.size || 0), 0);
-        last = { bytesDone: 0, filesDone: 0, filesTotal: (files || []).length };
-        rateAnchor = null;
-        bytesPerSec = 0;
-        currentDriveId = null;
         if (cancelBtn) {
             cancelBtn.disabled = false;
-            cancelBtn.textContent = 'Cancel';
+            cancelBtn.textContent = jobs.size > 1 ? 'Cancel all' : 'Cancel';
         }
-        buildStats(last.filesTotal > 1);
-        if (fileEl) fileEl.textContent = 'Starting…';
+        buildStats(totals().filesTotal > 1);
         render();
+        syncSurfaces();
+        return job.id;              // caller passes this back as clientJobId
+    }
+
+    // Drop a job and its driveId index entry.
+    function forget(job) {
+        if (!job) return;
+        jobs.delete(job.id);
+        if (job.driveId) byDriveId.delete(job.driveId);
+    }
+
+    function finish(jobId, shareLink) {
+        const job = jobs.get(jobId);
+        if (job) {
+            job.state = 'done';
+            job.shareLink = shareLink || null;
+            job.bytesDone = job.bytesTotal || job.bytesDone;
+        }
+        // Others still running: keep the modal where it is and keep going.
+        if (isActive()) {
+            if (cancelBtn) cancelBtn.textContent = building().length > 1 ? 'Cancel all' : 'Cancel';
+            render();
+            syncSurfaces();
+            return false;           // caller: do NOT open the Share Link modal
+        }
+        // A batch holds its finished rows so every link can be copied —
+        // popping the Share Link modal would only show the last one and
+        // close the rest away. Cancel has nothing left to stop, so it
+        // becomes the way out.
+        if (batchMultiple) {
+            clearThrottle();
+            batchSettled = true;
+            if (bgBtn) bgBtn.hidden = true;
+            if (cancelBtn) {
+                cancelBtn.disabled = false;
+                cancelBtn.textContent = 'Close';
+                cancelBtn.classList.add('is-finish');
+            }
+            render();
+            syncSurfaces();
+            return false;           // caller: do NOT open the Share Link modal
+        }
+
+        // Solo share: unchanged — hand over to the Share Link modal.
+        resetBatch();
+        window.closeSendModal?.();
+        syncSurfaces();
+        return true;                // caller: safe to show the Share Link modal
+    }
+
+    function fail(jobId, message) {
+        forget(jobs.get(jobId));
+        if (message) console.error('[share] build failed:', message);
+        if (isActive()) {
+            if (cancelBtn) cancelBtn.textContent = building().length > 1 ? 'Cancel all' : 'Cancel';
+            render();
+            syncSurfaces();
+            return;
+        }
+        // One job failed but siblings succeeded: hold their rows so their
+        // links survive. Wiping here would throw away a share that worked.
+        if (batchMultiple && jobs.size > 0) {
+            clearThrottle();
+            batchSettled = true;
+            if (bgBtn) bgBtn.hidden = true;
+            if (cancelBtn) {
+                cancelBtn.disabled = false;
+                cancelBtn.textContent = 'Close';
+                cancelBtn.classList.add('is-finish');
+            }
+            render();
+            syncSurfaces();
+            return;
+        }
+        resetBatch();
         syncSurfaces();
     }
 
@@ -5712,29 +6188,6 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
         if (renderTimer) clearTimeout(renderTimer);
         renderTimer = null;
         renderPending = false;
-    }
-
-    function finish() {
-        clearThrottle();
-        active = false;
-        backgrounded = false;
-        modalInner?.classList.remove('is-sharing');
-        // Close the Send modal — the Share Link modal is about to open and
-        // would otherwise stack on top of it.
-        window.closeSendModal?.();
-        syncSurfaces();
-        if (barEl) barEl.style.width = '0%';
-        if (ringEl) ringEl.style.strokeDashoffset = String(RING_C);
-    }
-
-    function fail(message) {
-        clearThrottle();
-        active = false;
-        backgrounded = false;
-        modalInner?.classList.remove('is-sharing');
-        syncSurfaces();
-        if (barEl) barEl.style.width = '0%';
-        if (message) console.error('[share] build failed:', message);
     }
 
     // IPC — one event per file written.
@@ -5753,46 +6206,76 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
         }, 125);
     }
 
+    // Arrives once per build, before any progress. This is the only place a
+    // driveId can be tied to the job that asked for it.
+    window.electronAPI.onShareStarted?.((_evt, data) => {
+        if (!data || !data.driveId) return;
+        const job = data.clientJobId ? jobs.get(data.clientJobId) : null;
+        if (!job) return;                       // not ours (CLI, another window)
+        job.driveId = data.driveId;
+        byDriveId.set(data.driveId, job);
+        if (!job.bytesTotal && data.bytesTotal) job.bytesTotal = data.bytesTotal;
+        if (data.filesTotal) job.filesTotal = data.filesTotal;
+        buildStats(totals().filesTotal > 1);
+        render();
+    });
+
     window.electronAPI.onShareProgress?.((_evt, data) => {
-        if (!active || !data) return;
-        if (data.driveId) currentDriveId = data.driveId;
-        last = {
-            bytesDone: data.bytesDone || 0,
-            filesDone: data.filesDone || 0,
-            // createDrive's count wins — the renderer's activeFiles length
-            // is wrong whenever a folder was expanded into many files.
-            filesTotal: data.filesTotal || last.filesTotal
-        };
+        if (!data || !data.driveId) return;
+        const job = byDriveId.get(data.driveId);
+        if (!job || job.state !== 'building') return;
+        job.bytesDone = data.bytesDone || 0;
+        job.filesDone = data.filesDone || 0;
+        // createDrive's count wins — the renderer's activeFiles length is
+        // wrong whenever a folder was expanded into many files.
+        job.filesTotal = data.filesTotal || job.filesTotal;
         // Trust the sender's total when the renderer's file sizes were
         // incomplete (drag-drop entries occasionally lack `size`).
-        if (!bytesTotal && data.bytesTotal) bytesTotal = data.bytesTotal;
-        if (fileEl && data.currentFile) fileEl.textContent = data.currentFile;
-        updateRate(last.bytesDone);
+        if (!job.bytesTotal && data.bytesTotal) job.bytesTotal = data.bytesTotal;
+        if (data.currentFile) job.currentFile = data.currentFile;
+        updateRate(job, job.bytesDone);
         scheduleRender();
     });
 
     // "Continue in background" — demote to the pill, close the modal.
     bgBtn?.addEventListener('click', () => {
-        backgrounded = true;
+        // Close first, demote after the overlay has finished fading.
+        // Flipping backgrounded straight away removes .is-sharing while the
+        // modal is still on screen, which is the same flash as above.
+        // 150ms covers the 0.11s overlay transition with room to spare.
         window.closeSendModal?.();
-        syncSurfaces();
+        setTimeout(() => {
+            backgrounded = true;
+            syncSurfaces();
+        }, 150);
+        syncSurfaces();   // pill appears immediately
     });
 
-    // Cancel — aborts the build. The backend deletes the partial drive, so
-    // nothing is left behind in the Shares list.
+    // Cancel every build in flight. Per-row cancel lands with the list UI;
+    // until then this is all-or-nothing, which at least targets the right
+    // drives instead of whichever one reported last.
     cancelBtn?.addEventListener('click', async () => {
-        if (!active) return;
+        // Settled batch: the button reads "Done" and just dismisses.
+        if (batchSettled) {
+            resetBatch();
+            window.closeSendModal?.();
+            syncSurfaces();
+            return;
+        }
+        const running = building();
+        if (!running.length) return;
         cancelBtn.disabled = true;
         cancelBtn.textContent = 'Cancelling…';
-        try {
-            await window.electronAPI.hyperdriveShareCancel?.(currentDriveId);
-        } catch (err) {
-            console.error('[share] cancel failed', err);
-            cancelBtn.disabled = false;
-            cancelBtn.textContent = 'Cancel';
+        for (const job of running) {
+            if (!job.driveId) continue;         // not started yet, nothing to abort
+            try {
+                await window.electronAPI.hyperdriveShareCancel?.(job.driveId);
+            } catch (err) {
+                console.error('[share] cancel failed', job.driveId, err);
+            }
         }
-        // startShare()'s rejection path calls fail(), which tears the
-        // progress state down — no need to do it here.
+        // startShare()'s rejection path calls fail(jobId), which tears each
+        // job down — no need to do it here.
     });
 
     // Clicking the pill returns to the modal.
@@ -5806,11 +6289,41 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
     // pill rather than losing the progress. Watched via the overlay's
     // class rather than patching every close path.
     if (modalOverlay) {
-        new MutationObserver(syncSurfaces).observe(modalOverlay, {
+        new MutationObserver(() => {
+            // Dismissing a settled batch by closing the modal is the same as
+            // pressing Done — otherwise the finished rows would still be
+            // there the next time Send is opened.
+            if (batchSettled && !modalOverlay.classList.contains('active')) {
+                resetBatch();
+            }
+            syncSurfaces();
+        }).observe(modalOverlay, {
             attributes: true,
             attributeFilter: ['class']
         });
     }
 
-    window.shareProgress = { begin, finish, fail };
+    // Files arrived while State C was up. The progress screen covers the
+    // whole modal, so the user would never see what they just dropped.
+    // Demote to the pill (still clickable, still counts) and let State A/B
+    // show. A SETTLED batch is dropped instead of demoted: the pill only
+    // appears for work in flight, so its rows would become unreachable —
+    // and every one of those shares is already in the Shares list with its
+    // link, so nothing is actually lost.
+    function yieldForNewFiles() {
+        if (batchSettled) { resetBatch(); syncSurfaces(); return; }
+        if (!isActive()) return;
+        backgrounded = true;
+        syncSurfaces();
+    }
+
+    // list() is what the list UI renders from.
+    window.shareProgress = {
+        begin,
+        finish,
+        fail,
+        yieldForNewFiles,
+        list: () => [...jobs.values()],
+        isActive
+    };
 })();

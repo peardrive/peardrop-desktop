@@ -21,12 +21,12 @@ const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 
-const { downloadFromDrive } = require('../lib/downloader');
+const { downloadFromDrive } = require('../src/lib/downloader');
 const {
     EngineError,
     PathTraversalError,
     FileStallError,
-} = require('../lib/engine-errors');
+} = require('../src/lib/engine-errors');
 
 // downloadFromDrive return shape --- //
 
@@ -184,7 +184,7 @@ test('formatCliError: handles non-Error thrown values', () => {
 
 test('openDrive return no longer exposes downloadAll or downloadFile closures', () => {
     const src = fs.readFileSync(
-        path.join(__dirname, '..', 'lib', 'hyperdrive-manager.js'),
+        path.join(__dirname, '..', 'src', 'lib', 'hyperdrive-manager.js'),
         'utf8',
     );
     // Any closure named downloadAll/downloadFile in the openDrive scope

@@ -3,3 +3,15 @@ node_modules/
 *.log
 debug-log-*.txt
 *.zip
+
+# Local design reference material, not part of the shipped app
+REFERENCES/
+
+# Editor / OS leftovers
+*.backup
+Thumbs.db
+
+# Build output (electron-builder et al. — not configured yet, but will be)
+dist/
+out/
+build/

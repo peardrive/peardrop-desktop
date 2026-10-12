@@ -1,0 +1,9 @@
+# Git stores every text file with LF regardless of each machine's
+# core.autocrlf, so one contributor cannot commit a whole-file CRLF diff.
+* text=auto eol=lf
+
+# Binary: never touch, never diff as text.
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary

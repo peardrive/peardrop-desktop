@@ -1174,7 +1174,7 @@
          * When menu is open, elevate the ENTIRE DriveItem above siblings.
          * This ensures the menu appears above other DriveItems' buttons.
          * Without this, later DOM siblings would stack above earlier ones' menus.
-         * See ARCHITECTURE.md for full explanation.
+         * See docs/ARCHITECTURE.md for full explanation.
          */
         .drive-item.menu-open {
           position: relative;
@@ -2029,7 +2029,7 @@
 
     _bindEvents() {
       // Use document click handler to close menu (instead of backdrop element)
-      // This avoids stacking context issues - see ARCHITECTURE.md
+      // This avoids stacking context issues - see docs/ARCHITECTURE.md
       this._documentClickHandler = (e) => {
         if (!this._menuOpen) return;
         // Menu may be on document.body, so check both the container and the menu itself

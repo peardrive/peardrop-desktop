@@ -1349,6 +1349,142 @@
             }
 
             /* Static-label / moving-number stat pair. */
+            /* ---- State C: multiple builds ---- */
+            .send-progress.is-multi .send-progress-dial,
+            .send-progress.is-multi .send-progress-file {
+                display: none;
+            }
+            .send-progress-list {
+                width: 100%;
+                /* .send-progress centres everything for the dial layout;
+                   file names in a row list have to start at the left edge. */
+                text-align: left;
+                max-height: 240px;
+                overflow-y: auto;
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                margin: 4px 0 18px;
+            }
+            .send-progress-row {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                padding: 10px 12px;
+                background: rgba(20, 20, 22, 0.75);
+                border: 2px solid rgba(255, 255, 255, 0.07);
+                border-radius: 12px;
+            }
+            .send-progress-row.is-done {
+                border-color: rgba(168, 206, 56, 0.4);
+            }
+            .spr-main {
+                flex: 1;
+                min-width: 0;
+            }
+            .spr-name {
+                font-size: 13px;
+                font-weight: 700;
+                letter-spacing: -0.1px;
+                color: #ffffff;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .spr-bar {
+                margin-top: 6px;
+                height: 4px;
+                border-radius: 999px;
+                background: rgba(255, 255, 255, 0.1);
+                overflow: hidden;
+            }
+            .spr-bar-fill {
+                height: 100%;
+                border-radius: 999px;
+                background: linear-gradient(90deg, #a8ce38, #76bf52);
+                transition: width 0.15s linear;
+            }
+            .spr-sub {
+                margin-top: 5px;
+                font-size: 11px;
+                font-weight: 600;
+                color: rgba(168, 206, 56, 0.9);
+            }
+            .spr-pct {
+                flex-shrink: 0;
+                font-size: 12px;
+                font-weight: 700;
+                color: rgba(255, 255, 255, 0.7);
+                font-variant-numeric: tabular-nums;
+            }
+            /* Round icon button, same language as the list's cancel X. */
+            .spr-icon-btn {
+                flex-shrink: 0;
+                width: 26px;
+                height: 26px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                padding: 0;
+                background: transparent;
+                border: 2px solid rgba(255, 255, 255, 0.18);
+                border-radius: 50%;
+                color: rgba(255, 255, 255, 0.65);
+                cursor: pointer;
+                transition: border-color 0.15s ease, color 0.15s ease;
+            }
+            .spr-icon-btn:hover {
+                border-color: rgba(255, 120, 120, 0.8);
+                color: rgba(255, 140, 140, 0.95);
+            }
+            .spr-icon-btn svg { width: 13px; height: 13px; }
+            .spr-copy {
+                flex-shrink: 0;
+                padding: 6px 14px;
+                background: transparent;
+                border: 2px solid rgba(168, 206, 56, 0.55);
+                border-radius: 999px;
+                color: #a8ce38;
+                font-family: inherit;
+                font-size: 12px;
+                font-weight: 700;
+                cursor: pointer;
+                transition: background 0.15s ease;
+            }
+            .spr-copy:hover { background: rgba(168, 206, 56, 0.12); }
+
+            .spr-qr-wrap {
+                flex-shrink: 0;
+                display: inline-flex;
+            }
+            .spr-qr-wrap .spr-icon-btn:hover {
+                border-color: rgba(168, 206, 56, 0.8);
+                color: #a8ce38;
+            }
+            /* QR peek lives OUTSIDE the row, as one fixed layer at body level.
+               It used to be position:absolute inside the row, where
+               .send-progress-list's overflow-y:auto clipped it — a scroll
+               container clips absolutely-positioned children no matter what
+               z-index they carry. Fixed positioning is the only way out.
+               pointer-events:none so it can never swallow a click. */
+            .spr-qr-layer {
+                position: fixed;
+                padding: 8px;
+                background: #ffffff;
+                border-radius: 10px;
+                box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+                z-index: 1300;          /* over the pill (1200) and modal (1000) */
+                pointer-events: none;
+                opacity: 0;
+                transition: opacity 0.14s ease;
+            }
+            .spr-qr-layer.is-visible { opacity: 1; }
+            .spr-qr-layer img {
+                display: block;
+                width: 132px;
+                height: 132px;
+            }
+
             .send-progress-stats {
                 display: flex;
                 align-items: center;
@@ -1403,6 +1539,17 @@
             .send-progress-cancel-btn:hover {
                 border-color: rgba(239, 74, 95, 0.9);
                 background: rgba(239, 74, 95, 0.12);
+            }
+            /* Once every build has finished the button stops being
+               destructive — it just dismisses. Destructive red on a button
+               that only closes a finished screen reads as "throw this away". */
+            .send-progress-cancel-btn.is-finish {
+                border-color: rgba(168, 206, 56, 0.55);
+                color: #a8ce38;
+            }
+            .send-progress-cancel-btn.is-finish:hover {
+                border-color: rgba(168, 206, 56, 0.9);
+                background: rgba(168, 206, 56, 0.12);
             }
             .send-progress-cancel-btn:disabled {
                 opacity: 0.5;
@@ -1475,6 +1622,16 @@
             .send-modal {
                 padding: 28px;
                 /* bg / border / blur inherited from canonical .modal rule */
+                /* Column flex so the two scrollable regions SHARE the 520px
+                   shell. They used to carry fixed max-heights (240 + 320)
+                   which together already exceeded it, so with files staged
+                   and four recents the content spilled out of the modal. */
+                display: flex;
+                flex-direction: column;
+            }
+            .send-modal-header,
+            .send-add-files-card {
+                flex-shrink: 0;
             }
             .send-modal-header {
                 display: flex;
@@ -1527,6 +1684,15 @@
                 background: linear-gradient(135deg, rgba(40, 70, 25, 0.65), rgba(28, 52, 35, 0.65));
                 border-color: rgba(168, 206, 56, 0.35);
             }
+            /* Dragging files over the card. Stronger than :hover so it is
+               unmistakably a drop target, and the green border goes to the
+               2px the rest of the app uses for an active outline. */
+            .send-add-files-card.drag-over {
+                background: linear-gradient(135deg, rgba(56, 94, 30, 0.8), rgba(36, 66, 44, 0.8));
+                border: 2px solid rgba(168, 206, 56, 0.85);
+                /* 1px -> 2px border would shift the content by a pixel. */
+                padding: 39px 27px;
+            }
             .send-add-files-icon {
                 width: 60px;
                 height: 60px;
@@ -1559,7 +1725,11 @@
                 display: none;
             }
             .send-file-review.active {
-                display: block;
+                display: flex;
+                flex-direction: column;
+                /* Shrinks before the recents do, but keeps its own cap. */
+                flex: 0 1 auto;
+                min-height: 0;
             }
             .send-modal.has-files .send-add-files-card {
                 display: none;
@@ -1679,7 +1849,16 @@
                 margin-top: 24px;
             }
             .send-recent.active {
-                display: block;
+                display: flex;
+                flex-direction: column;
+                /* Takes the leftover height and scrolls inside it, rather
+                   than claiming a fixed 320px the modal cannot afford. */
+                flex: 1 1 auto;
+                min-height: 0;   /* without this a flex child refuses to shrink */
+            }
+            .send-recent-divider,
+            .send-recent-header {
+                flex-shrink: 0;
             }
             .send-recent-divider {
                 /* Section break between Add Files and Recent Shares — heavier
@@ -1702,7 +1881,9 @@
                 display: grid;
                 grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
                 gap: 28px 24px;          /* generous row gap = air around the rule */
-                max-height: 320px;       /* taller rows need more room before scrolling */
+                /* Height now comes from the flex parent, not a fixed cap. */
+                flex: 1 1 auto;
+                min-height: 0;
                 overflow-y: auto;
                 overscroll-behavior: contain;
                 /* Centre rule as a background, not a ::before — a ::before
@@ -2113,13 +2294,15 @@
             }
             .settings-user-name {
                 font-size: 18px;
-                font-weight: 600;
+                font-weight: 700;
                 color: #ffffff;
+                letter-spacing: -0.2px;
                 margin-bottom: 2px;
             }
             .settings-user-id {
                 font-size: 13px;
-                color: rgba(255, 255, 255, 0.45);
+                font-weight: 600;
+                color: rgba(255, 255, 255, 0.5);
             }
             .settings-signout-btn {
                 padding: 9px 22px;
@@ -2143,9 +2326,11 @@
             }
             .settings-section-title {
                 font-size: 13px;
-                font-weight: 600;
-                color: rgba(255, 255, 255, 0.5);
-                letter-spacing: 0.5px;
+                font-weight: 700;
+                color: rgba(255, 255, 255, 0.55);
+                /* The app tracks tight and negative everywhere else; the
+                   +0.5px here was the only positive tracking in the file. */
+                letter-spacing: -0.1px;
                 margin: 0 0 8px;
                 text-transform: none;
             }
@@ -2159,7 +2344,7 @@
                 border: none;
                 color: #ffffff;
                 font-family: inherit;
-                font-size: 14px;
+                font-size: 15px;
                 text-align: left;
                 cursor: pointer;
                 border-radius: 8px;
@@ -2168,32 +2353,37 @@
             .settings-row:hover {
                 background: rgba(255, 255, 255, 0.04);
             }
+            /* No tinted container: in the Figma each glyph IS the artwork —
+               some are filled green squares, some are bare shapes — so a box
+               behind them would double up on the square ones. */
             .settings-row-icon {
-                width: 32px;
-                height: 32px;
+                width: 28px;
+                height: 28px;
                 display: inline-flex;
                 align-items: center;
                 justify-content: center;
-                background: rgba(168, 206, 56, 0.12);
-                border-radius: 8px;
-                color: rgba(168, 206, 56, 0.9);
+                color: #a8ce38;
                 flex-shrink: 0;
             }
             .settings-row-icon svg {
-                width: 16px;
-                height: 16px;
+                width: 26px;
+                height: 26px;
             }
             .settings-row-label {
                 flex: 1;
                 min-width: 0;
+                font-weight: 600;
+                letter-spacing: -0.1px;
             }
             .settings-row-value {
                 font-size: 13px;
-                color: rgba(255, 255, 255, 0.45);
+                font-weight: 600;
+                color: rgba(255, 255, 255, 0.5);
             }
             .settings-row-chevron {
-                color: rgba(255, 255, 255, 0.3);
+                color: rgba(255, 255, 255, 0.4);
                 font-size: 18px;
+                font-weight: 700;
                 line-height: 1;
             }
 
@@ -2343,6 +2533,62 @@
             }
             .bug-send-btn:active {
                 filter: brightness(0.95);
+            }
+            /* Under maintenance: flat, no gradient, no pointer. */
+            .bug-send-btn:disabled {
+                background: rgba(40, 40, 45, 0.9);
+                color: rgba(255, 255, 255, 0.4);
+                cursor: not-allowed;
+                filter: none;
+            }
+            .bug-send-note {
+                margin-top: 10px;
+                font-size: 12px;
+                font-weight: 600;
+                line-height: 1.5;
+                color: rgba(255, 255, 255, 0.4);
+                text-align: center;
+            }
+
+            /* ---- Diagnostics log card (Report a bug) ---- */
+            .bug-log-card {
+                margin-top: 4px;
+                padding: 16px;
+                background: rgba(20, 20, 22, 0.9);
+                border: 2px solid rgba(255, 255, 255, 0.1);
+                border-radius: 12px;
+            }
+            .bug-log-actions {
+                display: flex;
+                gap: 10px;
+                margin-top: 14px;
+            }
+            .bug-log-btn {
+                flex: 1;
+                padding: 10px 14px;
+                background: transparent;
+                border: 2px solid rgba(168, 206, 56, 0.55);
+                border-radius: 10px;
+                color: #a8ce38;
+                font-family: inherit;
+                font-size: 13px;
+                font-weight: 700;
+                letter-spacing: -0.1px;
+                cursor: pointer;
+                transition: background 0.15s ease, border-color 0.15s ease;
+            }
+            .bug-log-btn:hover {
+                background: rgba(168, 206, 56, 0.1);
+                border-color: rgba(168, 206, 56, 0.85);
+            }
+            .bug-log-btn:active {
+                transform: translateY(1px);
+            }
+            .bug-log-path {
+                margin-top: 12px;
+                font-size: 11px;
+                color: rgba(255, 255, 255, 0.3);
+                word-break: break-all;
             }
 
             /* ============================================================
@@ -3291,11 +3537,16 @@
                                 rgba(72, 98, 40, 0.62) 0%,
                                 rgba(36, 48, 22, 0.78) 100%);
             }
+            /* Hover fill is set per-ID for BOTH buttons. The base fills are
+               ID rules, so a .top-action-btn:hover background loses to them on
+               specificity — Send used to brighten only its border. */
             .top-action-btn:hover {
+                border-color: rgba(168, 206, 56, 0.85);
+            }
+            #topSendBtn:hover {
                 background: linear-gradient(180deg,
                                 rgba(96, 128, 52, 0.72) 0%,
                                 rgba(48, 64, 28, 0.85) 100%);
-                border-color: rgba(168, 206, 56, 0.85);
             }
             #topReceiveBtn:hover {
                 background: linear-gradient(0deg,
@@ -3320,30 +3571,32 @@
                 height: 100%;
             }
 
-            /* Gear — dark filled circle */
+            /* Gear — dark circle, lighter at the top */
             .top-settings-btn {
                 width: 38px;
                 height: 38px;
                 display: inline-flex;
                 align-items: center;
                 justify-content: center;
-                background: rgba(40, 40, 44, 0.9);
-                border: 2px solid rgba(255, 255, 255, 0.1);
+                background: linear-gradient(180deg, rgba(62, 62, 68, 0.95) 0%, rgba(30, 30, 34, 0.92) 100%);
+                border: none;
                 border-radius: 50%;
                 color: #ffffff;
                 cursor: pointer;
                 margin-left: 4px;
-                transition: background 0.2s ease, transform 0.15s ease;
+                /* brightness, not a second gradient: Chromium cannot interpolate
+                   between two gradients, so a background swap would snap */
+                transition: filter 0.2s ease, transform 0.15s ease;
             }
             .top-settings-btn:hover {
-                background: rgba(55, 55, 60, 0.95);
+                filter: brightness(1.18);
             }
             .top-settings-btn:active {
                 transform: scale(0.94);
             }
             .top-settings-btn svg {
-                width: 18px;
-                height: 18px;
+                width: 25px;
+                height: 25px;
             }
 
             /* ---- Search + filter row ----
@@ -4784,7 +5037,7 @@
          * STACKING CONTEXT WARNING: Do NOT add z-index here!
          * Adding z-index creates a new stacking context that traps all child
          * z-indices. Menus inside would be unable to layer above elements
-         * outside this container (like backdrops). See ARCHITECTURE.md.
+         * outside this container (like backdrops). See docs/ARCHITECTURE.md.
          */
         .list-container {
             flex: 1;
@@ -5917,9 +6170,8 @@
                     <span class="top-action-label">Receive</span>
                 </button>
                 <button type="button" class="top-settings-btn" id="topSettingsBtn" title="Settings" aria-label="Settings">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <circle cx="12" cy="12" r="3"></circle>
-                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                    <svg viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd" aria-hidden="true">
+                        <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54A.484.484 0 0 0 13.92 2h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.47c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"></path>
                     </svg>
                 </button>
             </div>
@@ -6343,13 +6595,18 @@
                     </div>
                 </div>
 
-                <div class="send-progress-title">Preparing your files</div>
+                <div class="send-progress-title" id="sendProgressTitle">Preparing your files</div>
                 <div class="send-progress-file" id="sendProgressFile">&mdash;</div>
 
                 <!-- Static bold labels; only the numbers change. -->
                 <!-- Stats are rebuilt by the renderer: a group shows
                      Files / Size / Time left, a single file just Size /
                      Time left (a file count of 1 says nothing). -->
+                <!-- Two or more builds at once: the dial and the single
+                     "current file" line are hidden by .is-multi and this
+                     takes their place, one row per build. -->
+                <div class="send-progress-list" id="sendProgressList" hidden></div>
+
                 <div class="send-progress-stats" id="sendProgressStats"></div>
 
                 <div class="send-progress-actions">
@@ -6413,6 +6670,10 @@
         </div>
     </div>
 
+    <!-- QR peek layer for the Send-modal build list. Body level on purpose:
+         inside the list it would be clipped by that list's own scrolling. -->
+    <div class="spr-qr-layer" id="sprQrLayer" aria-hidden="true"><img alt=""></div>
+
     <!-- Download-complete toast — bottom-right, appears when a download
          finishes. Distinct from the general showToast (which is
          center-bottom). Wired via renderer.js onFilesDownloaded. -->
@@ -6433,6 +6694,11 @@
          Settings Page (Desktop v2) — full-window overlay that covers
          the whole app. Opens from the top-right gear button; closes via
          the back arrow. Contains user card + Appearance + Support.
+
+         Row icons are from Reicon (https://github.com/dqev/reicon), MIT,
+         inlined verbatim — each is tagged with its source name. Solar was
+         the other candidate and is byte-identical for several of these,
+         but it is CC BY 4.0 and would need visible attribution.
          ============================================================ -->
     <div class="app-fullpage" id="settingsPage">
         <header class="fullpage-header">
@@ -6461,17 +6727,17 @@
         <section class="settings-section">
             <h2 class="settings-section-title">Appearance</h2>
             <button type="button" class="settings-row" data-action="edit-account">
-                <span class="settings-row-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg></span>
+                <span class="settings-row-icon"><!-- reicon:pen-square-filled --><svg viewBox="0 0 24 24" aria-hidden="true"><g fill="currentColor"><path d="M21.194 2.806a2.753 2.753 0 0 1 0 3.893l-.496.496a5 5 0 0 1-.533-.151a5.2 5.2 0 0 1-1.968-1.241a5.2 5.2 0 0 1-1.241-1.968a5 5 0 0 1-.15-.533l.495-.496a2.753 2.753 0 0 1 3.893 0M14.58 13.313c-.404.404-.606.606-.829.78a4.6 4.6 0 0 1-.848.524c-.255.121-.526.211-1.068.392l-2.858.953a.742.742 0 0 1-.939-.94l.953-2.857c.18-.542.27-.813.392-1.068q.217-.453.524-.848c.174-.223.376-.425.78-.83l4.916-4.915a6.7 6.7 0 0 0 1.533 2.36a6.7 6.7 0 0 0 2.36 1.533z"/><path d="M20.536 20.536C22 19.07 22 16.714 22 12c0-1.548 0-2.842-.052-3.934l-6.362 6.362c-.351.352-.615.616-.912.847a6 6 0 0 1-1.125.696c-.34.162-.694.28-1.166.437l-2.932.977a2.242 2.242 0 0 1-2.836-2.836l.977-2.932c.157-.472.275-.826.437-1.166q.287-.6.696-1.125c.231-.297.495-.56.847-.912l6.362-6.362C14.842 2 13.548 2 12 2C7.286 2 4.929 2 3.464 3.464C2 4.93 2 7.286 2 12s0 7.071 1.464 8.535C4.93 22 7.286 22 12 22s7.071 0 8.535-1.465"/></g></svg></span>
                 <span class="settings-row-label">Edit Account</span>
                 <span class="settings-row-chevron" aria-hidden="true">›</span>
             </button>
             <button type="button" class="settings-row" data-action="language">
-                <span class="settings-row-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg></span>
+                <span class="settings-row-icon"><!-- reicon:language-square-filled --><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16.19 2H7.81C4.17 2 2 4.17 2 7.81v8.37C2 19.83 4.17 22 7.81 22h8.37c3.64 0 5.81-2.17 5.81-5.81V7.81C22 4.17 19.83 2 16.19 2M17 17.47c-1.71 0-3.31-.74-4.59-2.11c-1.45 1.31-3.34 2.11-5.41 2.11c-.41 0-.75-.34-.75-.75s.34-.75.75-.75c3.47 0 6.34-2.75 6.71-6.27h-6.7c-.41 0-.75-.34-.75-.75s.34-.74.75-.74h4.24v-.93c0-.41.34-.75.75-.75s.75.34.75.75v.93h1.69c.02 0 .04-.01.06-.01s.04.01.06.01h2.43c.41 0 .75.34.75.75s-.34.75-.75.75h-1.78a8.75 8.75 0 0 1-1.77 4.56c1 1.11 2.25 1.71 3.56 1.71c.41 0 .75.34.75.75s-.34.74-.75.74"/></svg></span>
                 <span class="settings-row-label">Language</span>
                 <span class="settings-row-chevron" aria-hidden="true">›</span>
             </button>
             <button type="button" class="settings-row" data-action="theme">
-                <span class="settings-row-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg></span>
+                <span class="settings-row-icon"><!-- reicon:paint-roller --><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M8.468 1.25h7.064c.44 0 .82 0 1.13.028c.33.03.656.096.963.273c.342.198.626.482.824.824c.177.307.243.633.273.962q.016.19.022.413h.325c.424 0 .779 0 1.07.019c.303.02.59.062.868.172a2.75 2.75 0 0 1 1.552 1.552c.11.279.152.565.172.868c.019.291.019.646.019 1.07v.144c0 .659.001 1.171-.157 1.618a2.75 2.75 0 0 1-1.303 1.513c-.419.223-.926.298-1.576.395l-.12.018l-4.076.612c-.832.124-1.386.209-1.797.325c-.39.11-.559.224-.668.35c-.13.15-.217.36-.263.854q.22.009.407.033c.356.048.731.16 1.04.47s.422.684.47 1.04c.043.323.043.72.043 1.152v4.09c0 .433 0 .83-.043 1.152c-.048.356-.16.731-.47 1.04s-.684.422-1.04.47c-.323.043-.72.043-1.152.043h-.09c-.433 0-.83 0-1.152-.043c-.356-.048-.731-.16-1.04-.47s-.422-.684-.47-1.04c-.043-.323-.043-.72-.043-1.152v-4.09c0-.433 0-.83.043-1.152c.048-.356.16-.731.47-1.04s.684-.422 1.04-.47q.22-.028.48-.036c.053-.704.197-1.323.633-1.83c.375-.435.856-.663 1.399-.815c.512-.145 1.16-.242 1.934-.358l4.123-.618c.828-.124 1.053-.169 1.215-.255a1.25 1.25 0 0 0 .592-.687c.06-.172.071-.402.071-1.239c0-.455 0-.76-.016-.996a1.4 1.4 0 0 0-.07-.417a1.25 1.25 0 0 0-.706-.705c-.074-.03-.187-.056-.417-.071a17 17 0 0 0-.996-.016h-.3q-.007.222-.023.413c-.03.329-.096.655-.273.962a2.25 2.25 0 0 1-.824.824c-.307.177-.633.243-.962.273c-.312.028-.691.028-1.13.028H8.467c-.44 0-.82 0-1.13-.028c-.33-.03-.656-.096-.963-.273a2.25 2.25 0 0 1-.824-.824c-.177-.307-.243-.633-.273-.962a7 7 0 0 1-.023-.454a.75.75 0 0 1 0-1.418q.005-.247.023-.454c.03-.329.096-.655.273-.962a2.25 2.25 0 0 1 .824-.824c.307-.177.633-.243.962-.273c.312-.028.691-.028 1.13-.028m3.537 13.5H12c-.493 0-.787.002-.997.03a.7.7 0 0 0-.177.042l-.003.001l-.001.003l-.005.01a.7.7 0 0 0-.037.167c-.028.21-.03.504-.03.997v4c0 .493.002.787.03.997a.7.7 0 0 0 .042.177l.001.003l.003.001l.01.005c.022.009.07.024.167.037c.21.028.504.03.997.03s.787-.002.997-.03a.7.7 0 0 0 .167-.037l.008-.004h.002l.003-.002l.001-.003l.005-.01a.7.7 0 0 0 .037-.167c.028-.21.03-.504.03-.997v-4c0-.493-.002-.787-.03-.997a.7.7 0 0 0-.042-.177l-.001-.003l-.003-.001l-.005-.003l-.005-.002a.7.7 0 0 0-.167-.037c-.21-.028-.502-.03-.992-.03M7.473 2.772c-.225.02-.307.055-.348.078a.75.75 0 0 0-.275.275c-.023.04-.058.123-.078.348c-.021.235-.022.546-.022 1.027s0 .792.022 1.027c.02.225.055.307.078.348a.75.75 0 0 0 .275.275c.04.023.123.058.348.078c.235.021.546.022 1.027.022h7c.481 0 .792 0 1.027-.022c.225-.02.307-.055.348-.078a.75.75 0 0 0 .274-.275c.024-.04.058-.123.079-.348c.021-.235.022-.546.022-1.027s0-.792-.022-1.027c-.02-.225-.055-.307-.079-.348a.75.75 0 0 0-.274-.275c-.04-.023-.123-.058-.348-.078A13 13 0 0 0 15.5 2.75h-7c-.481 0-.792 0-1.027.022m3.35 12.051" clip-rule="evenodd"/></svg></span>
                 <span class="settings-row-label">Theme</span>
                 <span class="settings-row-value">Dark</span>
                 <span class="settings-row-chevron" aria-hidden="true">›</span>
@@ -6481,12 +6747,12 @@
         <section class="settings-section">
             <h2 class="settings-section-title">Support</h2>
             <button type="button" class="settings-row" data-action="report-bug" id="settingsReportBugBtn">
-                <span class="settings-row-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="M9 9h6v6H9z"></path></svg></span>
+                <span class="settings-row-icon"><!-- reicon:cpu --><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M9 1.25a.75.75 0 0 1 .75.75v1.263a86 86 0 0 1 1.5-.013V2a.75.75 0 0 1 1.5 0v1.25q.802 0 1.5.013V2a.75.75 0 0 1 1.5 0v1.327q.39.03.739.076c1.172.158 2.121.49 2.87 1.238c.748.749 1.08 1.698 1.238 2.87q.046.35.076.739H22a.75.75 0 0 1 0 1.5h-1.263q.013.698.013 1.5H22a.75.75 0 0 1 0 1.5h-1.25q0 .802-.013 1.5H22a.75.75 0 0 1 0 1.5h-1.327q-.03.39-.076.739c-.158 1.172-.49 2.121-1.238 2.87c-.749.748-1.698 1.08-2.87 1.238q-.35.046-.739.076V22a.75.75 0 0 1-1.5 0v-1.263q-.698.013-1.5.013V22a.75.75 0 0 1-1.5 0v-1.25q-.802 0-1.5-.013V22a.75.75 0 0 1-1.5 0v-1.327q-.39-.03-.739-.076c-1.172-.158-2.121-.49-2.87-1.238c-.748-.749-1.08-1.698-1.238-2.87q-.046-.35-.076-.739H2a.75.75 0 0 1 0-1.5h1.263a86 86 0 0 1-.013-1.5H2a.75.75 0 0 1 0-1.5h1.25q0-.802.013-1.5H2a.75.75 0 0 1 0-1.5h1.327q.03-.39.076-.739c.158-1.172.49-2.121 1.238-2.87c.749-.748 1.698-1.08 2.87-1.238q.35-.046.739-.076V2A.75.75 0 0 1 9 1.25M7.71 4.89c-1.005.135-1.585.389-2.008.812S5.025 6.705 4.89 7.71c-.138 1.028-.14 2.382-.14 4.289s.002 3.262.14 4.29c.135 1.005.389 1.585.812 2.008s1.003.677 2.009.812c1.028.138 2.382.14 4.289.14s3.262-.002 4.29-.14c1.005-.135 1.585-.389 2.008-.812s.677-1.003.812-2.009c.138-1.028.14-2.382.14-4.289s-.002-3.261-.14-4.29c-.135-1.005-.389-1.585-.812-2.008s-1.003-.677-2.009-.812c-1.028-.138-2.382-.14-4.289-.14s-3.261.002-4.29.14m2.24 1.36h4.1c.664 0 1.237 0 1.696.062c.492.066.963.215 1.345.597s.531.854.597 1.345c.062.459.062 1.032.062 1.697v4.098c0 .665 0 1.238-.062 1.697c-.066.492-.215.963-.597 1.345s-.854.531-1.345.597c-.459.062-1.032.062-1.697.062H9.951c-.665 0-1.238 0-1.697-.062c-.491-.066-.963-.215-1.345-.597s-.531-.854-.597-1.345c-.062-.459-.062-1.032-.062-1.697V9.951c0-.665 0-1.238.062-1.697c.066-.491.215-.963.597-1.345s.854-.531 1.345-.597c.459-.062 1.032-.062 1.697-.062M8.455 7.798c-.325.044-.427.115-.484.172s-.128.159-.172.484c-.046.347-.048.818-.048 1.546v4c0 .728.002 1.2.048 1.546c.044.325.115.427.172.484s.159.128.484.172c.347.046.818.048 1.546.048h4c.728 0 1.2-.002 1.546-.048c.325-.044.427-.115.484-.172s.128-.159.172-.484c.046-.347.048-.818.048-1.546v-4c0-.728-.002-1.2-.048-1.546c-.044-.325-.115-.427-.172-.484s-.159-.128-.484-.172c-.347-.046-.818-.048-1.546-.048h-4c-.728 0-1.2.002-1.546.048" clip-rule="evenodd"/></svg></span>
                 <span class="settings-row-label">Report a bug</span>
                 <span class="settings-row-chevron" aria-hidden="true">›</span>
             </button>
             <button type="button" class="settings-row" data-action="about">
-                <span class="settings-row-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span>
+                <span class="settings-row-icon"><!-- reicon:alert-filled --><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M7.843 3.802C9.872 2.601 10.886 2 12 2s2.128.6 4.157 1.802l.686.406c2.029 1.202 3.043 1.803 3.6 2.792c.557.99.557 2.19.557 4.594v.812c0 2.403 0 3.605-.557 4.594s-1.571 1.59-3.6 2.791l-.686.407C14.128 21.399 13.114 22 12 22s-2.128-.6-4.157-1.802l-.686-.407c-2.029-1.2-3.043-1.802-3.6-2.791C3 16.01 3 14.81 3 12.406v-.812C3 9.19 3 7.989 3.557 7s1.571-1.59 3.6-2.792zM13 16a1 1 0 1 1-2 0a1 1 0 0 1 2 0m-1-9.75a.75.75 0 0 1 .75.75v6a.75.75 0 0 1-1.5 0V7a.75.75 0 0 1 .75-.75" clip-rule="evenodd"/></svg></span>
                 <span class="settings-row-label">About</span>
                 <span class="settings-row-value" id="settingsAboutVersion">v0.25.0</span>
                 <span class="settings-row-chevron" aria-hidden="true">›</span>
@@ -6496,8 +6762,9 @@
 
     <!-- ============================================================
          Report a bug Page (Desktop v2) — full-window overlay. Reached
-         from Settings → Report a bug row. Send Report button currently
-         just shows a "Report sent" confirmation toast (no backend wiring).
+         from Settings → Report a bug row. Send Report is disabled until a
+         submission endpoint exists; the diagnostics-log buttons are the
+         working path for getting evidence out of the app.
          ============================================================ -->
     <div class="app-fullpage" id="reportBugPage">
         <header class="fullpage-header">
@@ -6533,7 +6800,27 @@
             </label>
         </div>
 
-        <button type="button" class="bug-send-btn" id="bugSendReportBtn">Send Report</button>
+        <!-- Diagnostics log — the only part of bug reporting that works end to
+             end today. Show reveals the file in the OS file manager so it can be
+             dragged into a chat; Copy puts the tail on the clipboard for a paste.
+             Both flush the write buffer first (see log-reveal / log-read-tail in
+             main.js), so the last second before a crash is on disk. Contents are
+             redacted at write time — keys truncated, home path -> ~. -->
+        <div class="bug-log-card">
+            <div class="bug-attach-title">Diagnostics log</div>
+            <div class="bug-attach-subtitle">Keys and your home folder are already stripped out. File contents are never logged.</div>
+            <div class="bug-log-actions">
+                <button type="button" class="bug-log-btn" id="bugShowLogBtn">Show log file</button>
+                <button type="button" class="bug-log-btn" id="bugCopyLogBtn">Copy last 300 lines</button>
+            </div>
+            <div class="bug-log-path" id="bugLogPath"></div>
+        </div>
+
+        <!-- Disabled in the markup, not just ignored in JS: there is no endpoint
+             behind this, and the button used to clear the form and claim the
+             report was sent. -->
+        <button type="button" class="bug-send-btn" id="bugSendReportBtn" disabled>Sending — under maintenance</button>
+        <div class="bug-send-note">In-app sending isn’t wired up yet. Copy the log or show the file, and drop it in the group chat.</div>
     </div>
 
     <!-- Reset Notice Modal — one-time playful heads-up after persistence-bug fix.
@@ -6648,7 +6935,7 @@
     <script src="lib/drive-item/drive-item.js"></script>
     <script src="lib/drive-item/drive-info-panel.js"></script>
     <script src="lib/drive-actions.js"></script>
-    <script src="node_modules/jsqr/dist/jsQR.js"></script>
+    <script src="../node_modules/jsqr/dist/jsQR.js"></script>
     <script src="lib/qr-scanner/qr-scanner.js"></script>
     <script src="renderer.js"></script>
 </body>

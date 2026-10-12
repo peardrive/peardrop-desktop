@@ -94,7 +94,7 @@ Native media preview tool (QuickTime-inspired):
 
 ## Architecture Decisions
 
-**Document:** `~/Apps/peardrop/lib/ARCHITECTURE.md`
+**Document:** `src/lib/ARCHITECTURE.md`
 
 1. **Blocks inside blocks** — Parent provides slot, child owns content
 2. **itemFactory pattern** — `new ScrollList(el, { itemFactory: (slot, data) => new DriveItem(slot, { data }) })`

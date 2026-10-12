@@ -16,8 +16,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 
-const { downloadFromDrive } = require('../lib/downloader');
-const { EngineError } = require('../lib/engine-errors');
+const { downloadFromDrive } = require('../src/lib/downloader');
+const { EngineError } = require('../src/lib/engine-errors');
 
 // Drive mock. `entries` is the list of manifest keys the mock's list('/')
 // should yield. downloadFromDrive iterates and (this sprint) filters

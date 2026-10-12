@@ -1,8 +1,14 @@
 {
   "name": "peardrop",
-  "version": "0.27.0",
+  "version": "0.28.0",
   "description": "Simple, elegant P2P file sharing using pearcore",
-  "main": "main.js",
+  "license": "MIT",
+  "author": "Anjou",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/peardrive/peardrop-desktop.git"
+  },
+  "main": "src/main.js",
   "type": "commonjs",
   "bin": {
     "peardrop": "./bin/peardrop"

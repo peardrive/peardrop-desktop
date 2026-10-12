@@ -1,7 +1,7 @@
 /**
  * MODULE: preload.js
  * PURPOSE: Secure IPC bridge between renderer and main process
- * VERSION: 0.27.0
+ * VERSION: 0.28.0
  * EXPORTS (via window.electronAPI):
  *   INVOKE (renderer -> main):
  *     Hyperdrive:
@@ -32,6 +32,7 @@
  * onPeerConnected(cb) - Peer joined
  * onPeerDisconnected(cb) - Peer left
  * onUploadProgress(cb) - Transfer progress
+ * onShareStarted(cb) - Build began; driveId + clientJobId for routing
  * onShareProgress(cb) - Share build progress (per file)
  * hyperdriveShareCancel(driveId) - Abort an in-flight share build
  * hyperdriveDownloadCancel(driveId) - Abort an in-flight download
@@ -117,6 +118,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onPeerConnected: (callback) => ipcRenderer.on('peer-connected', callback),
     onPeerDisconnected: (callback) => ipcRenderer.on('peer-disconnected', callback),
     onUploadProgress: (callback) => ipcRenderer.on('upload-progress', callback),
+    onShareStarted: (callback) => ipcRenderer.on('share-started', callback),
     onShareProgress: (callback) => ipcRenderer.on('share-progress', callback),
     hyperdriveShareCancel: (driveId) => ipcRenderer.invoke('hyperdrive-share-cancel', { driveId }),
     hyperdriveDownloadCancel: (driveId) => ipcRenderer.invoke('hyperdrive-download-cancel', { driveId }),

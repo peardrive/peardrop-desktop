@@ -1,5 +1,75 @@
 # PearDrop Changelog
 
+## v0.28.0 (2026-10-12) - Folder Shares, Concurrent Shares, Repo Layout
+
+**Sharing a folder works, and more than one share can run at a time.**
+
+### Features
+- **Folder sharing.** Dropping a folder used to fail with `EISDIR`: its
+  contents were enumerated for the file count and then discarded, and the
+  directory itself was handed to the file reader. The contents are now
+  expanded before the drive is built.
+- **A share is a flat group of files.** Subfolders are dissolved; everything
+  lands at the root of the share, matching what the list shows. Repeated
+  filenames are numbered (`a (2).txt`) — without that the second file would
+  overwrite the first in the drive and the share would silently be short a
+  file. Collisions are matched case-insensitively, since Windows and macOS
+  treat `A.TXT` and `a.txt` as one name.
+- **Concurrent shares.** Two builds at once showed one flickering progress
+  dial, and Cancel hit whichever drive reported last. Each build is now its
+  own job: 2+ switch to a list with per-row progress, per-row cancel, and
+  Copy Link plus a QR preview once a row finishes.
+- **Drag and drop.** The Send modal's Add Files card listens for drops. A file
+  dropped anywhere else opens the Send modal with it — which also stops
+  Electron navigating the window to the dropped file.
+- **Diagnostics log** on the Report a bug page: show the file, or copy the
+  last 300 lines. Sending is disabled rather than pretending.
+
+### Fixes
+- Cancelling during the connecting phase left the card stuck under a
+  "Cancelling…" overlay forever; it never emitted the event the renderer
+  clears on.
+- The Send button's hover fill never applied — its base gradient is an ID
+  rule, which outranks the class-level hover.
+- Show-log used `shell.showItemInFolder`, which returns nothing and routinely
+  does nothing on Windows. Now `openPath`, which reports failure.
+- Send modal content could overflow its shell: two inner lists carried fixed
+  max-heights that together exceeded it.
+- Backgrounding a build flashed the file picker during the modal's fade.
+- Progress read "Starting…" and "Preparing your files" after it had finished.
+- `.ts` showed a gear — it is video far more often than TypeScript here.
+
+### Engine
+- `createDrive` emits `share-started` (`driveId`, `clientJobId`, name,
+  totals) once before any progress, and accepts an opaque
+  `options.clientJobId` it hands straight back. The renderer could not
+  otherwise tell whose progress event was whose. Additive; no existing line
+  changed. **Desktop-side divergence — flag to the engine devs.**
+
+### Repository
+- All application source moved under `src/`; docs under `docs/`; screenshots
+  under `assets/`. `REFERENCES/` untracked, tracked backup files and a dated
+  `_archive/` removed.
+- `package.json` declares license, author and repository.
+- `.gitattributes` pins LF so one contributor cannot commit a whole-file CRLF
+  diff.
+
+### Known gaps
+- Not tested across two machines. Concurrent sharing is verified by reading
+  and by the test suite, not by a real two-share run.
+- A share build cannot be interrupted once a write blocks — `cancelShare`
+  only sets a flag the loop checks between files, and there is no stall
+  watchdog on the share path. A full disk parks a build until restart.
+- Failed and interrupted transfers leak their Corestore folders; nothing
+  cleans them up.
+- "Attach device info" on the Report a bug page is inert, and device model is
+  never captured.
+- `showItemInFolder` is still used for drive cards' Show in folder, with the
+  same flaw that was just fixed for the log.
+- `livePeers` counts sockets rather than distinct peers, so a duplicate
+  connection can mask a real disconnect.
+- Pause is still not implemented.
+
 ## v0.27.0 (2026-09-17) - Share Reachability, Interrupted Downloads, Renaming
 
 **Cards now describe what is actually happening, rather than what was assumed.**

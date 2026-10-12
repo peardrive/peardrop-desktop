@@ -10,7 +10,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { decideDupCheckAction } = require('../lib/dup-check-action');
+const { decideDupCheckAction } = require('../src/lib/dup-check-action');
 
 test('not a duplicate → proceed', () => {
     const out = decideDupCheckAction({ isDuplicate: false });

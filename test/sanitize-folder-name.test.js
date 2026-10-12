@@ -10,7 +10,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { sanitizeFolderName } = require('../lib/file-utils');
+const { sanitizeFolderName } = require('../src/lib/file-utils');
 
 test('sanitizeFolderName: plain ASCII name passes through', () => {
     assert.equal(sanitizeFolderName('MyProject'), 'MyProject');

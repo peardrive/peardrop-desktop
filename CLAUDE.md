@@ -6,7 +6,7 @@
 
 **Scope:** desktop-only (`≥ 600px` breakpoint). Mobile UI is untouched and
 we reconcile the two layouts *later*. Engine, IPC contract, sacred core:
-all off-limits — pure UI reskin against the existing renderer.js hooks.
+all off-limits — pure UI reskin against the existing src/renderer.js hooks.
 
 Reference: Figma frames sent by Amir (Mac window mockups, dark theme).
 Traffic lights in the mockups are Cocoa chrome — on the real Windows
@@ -116,7 +116,7 @@ build we get standard caption controls, don't draw fake window chrome.
 
 ### Out of scope (do NOT touch during redesign)
 
-- `main.js`, `preload.js`, any `lib/*.js` engine files, IPC contract,
+- `src/main.js`, `src/preload.js`, any `src/lib/*.js` engine files, IPC contract,
   sacred-core rules from the section below
 - Mobile-UI (anything not inside `@media (min-width: 600px)`)
 - Window-state persistence, All Shares tab wiring — those stay
@@ -135,13 +135,13 @@ current step. Commit after each meaningful screen.
 
 ### Protected Code (modify ONLY if absolutely necessary):
 
-**In `lib/hyperdrive-manager.js`:**
+**In `src/lib/hyperdrive-manager.js`:**
 - `createDrive()` - File writing to Hyperdrive
 - `openDrive()` - File reading from Hyperdrive  
 - Swarm `join()` / `replicate()` logic
 - The basic share → connect → download flow
 
-**In `main.js`:**
+**In `src/main.js`:**
 - `hyperdrive-share` IPC handler core
 - `hyperdrive-download` IPC handler core
 
@@ -163,10 +163,10 @@ current step. Commit after each meaningful screen.
 
 ### 1. Syntax Check
 ```bash
-node --check renderer.js
-node --check preload.js  
-node --check main.js
-node --check lib/*.js
+node --check src/renderer.js
+node --check src/preload.js
+node --check src/main.js
+node --check src/lib/*.js
 ```
 
 ### 2. Launch Test
@@ -204,7 +204,6 @@ See: `~/Projects/ENGINEERING-PRINCIPLES.md` Rule #9
 ### Recent Changes (v0.17.x)
 - Replaced `download-history.js` + manifest tracking with unified `DriveManager`
 - New IPC: `drives-list`, `drives-pause`, `drives-resume`, `drives-remove`
-- Deprecated files moved to `lib/_deprecated/`
 
 ---
 
@@ -280,7 +279,7 @@ Copy-paste modification instead of single source of truth. Changed one, forgot t
 
 ### The Fix
 1. Unified both to use identical HTML structure
-2. Created `lib/transfer-ui.js` for reusable components
+2. Created `src/lib/transfer-ui.js` for reusable components
 3. Documented the pattern in this file
 
 ### Rule Added
@@ -346,20 +345,24 @@ peardrop stop    # stop all shares
 ## Architecture
 
 ```
-~/Apps/peardrop/
-├── main.js                    # THIN: Electron lifecycle + IPC routing
-├── renderer.js                # UI logic, transfer display
-├── preload.js                 # Secure IPC bridge
-├── index.html                 # Glassmorphism UI + CSS
+peardrop-desktop/
 ├── bin/peardrop               # CLI tool
+├── test/                      # node --test suites
+├── assets/                    # app icons + README screenshots
+├── docs/                      # ARCHITECTURE, ROADMAP, STATUS, PROPOSALs
 ├── CHANGELOG.md               # Version history
-└── lib/
-    ├── hyperdrive-manager.js  # 🔒 SACRED: Drive lifecycle, swarm, P2P
-    ├── drive-manager.js       # ✅ SAFE: Single source of truth for all drives
-    ├── downloader.js          # ✅ SAFE: Download orchestration
-    ├── file-utils.js          # ✅ SAFE: Pure file utilities
-    ├── progress-tracker.js    # Upload tracking, events
-    └── transfer-ui.js         # ✅ SAFE: Reusable UI components (progress bars)
+└── src/                       # ALL application source lives here
+    ├── main.js                # THIN: Electron lifecycle + IPC routing
+    ├── renderer.js            # UI logic, transfer display
+    ├── preload.js             # Secure IPC bridge
+    ├── index.html             # UI markup + CSS
+    └── lib/
+        ├── hyperdrive-manager.js  # 🔒 SACRED: Drive lifecycle, swarm, P2P
+        ├── drive-manager.js       # ✅ SAFE: Single source of truth for all drives
+        ├── downloader.js          # ✅ SAFE: Download orchestration
+        ├── file-utils.js          # ✅ SAFE: Pure file utilities
+        ├── progress-tracker.js    # Upload tracking, events
+        └── transfer-ui.js         # ✅ SAFE: Reusable UI components (progress bars)
 ```
 
 ### DriveManager (v0.17.0) - Single Source of Truth
@@ -388,8 +391,8 @@ peardrop stop    # stop all shares
 **✅ SAFE (can modify freely):**
 - `downloader.js`: File writing, naming, progress callbacks
 - `file-utils.js`: getUniqueFilePath, ensureDir, formatBytes
-- `renderer.js`: UI only
-- `index.html`: Styles only
+- `src/renderer.js`: UI only
+- `src/index.html`: Styles only
 - `manifest-recovery.js`: Robust manifest recovery and validation (v0.19.1)
 
 ### Storage Locations
@@ -413,7 +416,7 @@ peardrop stop    # stop all shares
 
 ### Manifest Recovery System (v0.19.1)
 
-**File:** `lib/manifest-recovery.js` - Isolated module for robust drives-state.json handling
+**File:** `src/lib/manifest-recovery.js` - Isolated module for robust drives-state.json handling
 
 **Recovery Strategies (in order):**
 1. **Normal load** - Try standard JSON.parse first
@@ -440,7 +443,7 @@ peardrop stop    # stop all shares
 - Emits `upload-progress` with percent, speed, bytes
 
 ### Download (receiver side)
-- `main.js` hooks `blobs.core.on('download')` in `hyperdrive-download` handler
+- `src/main.js` hooks `blobs.core.on('download')` in `hyperdrive-download` handler
 - Uses `session.totalBytes` from manifest for percentage
 - Emits `upload-progress` with `peerId: 'self'` (renderer shows as "Downloading")
 
@@ -512,7 +515,7 @@ Result: Backdrop (9999 at root) beats menu (10000 inside a z-50 context). Menu i
 - **Container:** `position: relative` only — NO z-index
 - **Active item elevation:** `.menu-open` class adds `z-index: 1000` to DriveItem when menu is open, lifting it above sibling DriveItems so their buttons don't cover the menu
 
-See `ARCHITECTURE.md` for full component layer documentation.
+See `docs/ARCHITECTURE.md` for full component layer documentation.
 
 ---
 
@@ -524,7 +527,7 @@ From Guy's roadmap:
 3. **Spaces integration** - Group sharing via pearcore
 4. **Download history** - Track past transfers
 
-See `PROPOSAL-metadata-layer.md` for pearcore signaling layer design.
+See `docs/PROPOSAL-metadata-layer.md` for pearcore signaling layer design.
 
 ---
 
