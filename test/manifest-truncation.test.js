@@ -10,7 +10,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { computeTruncation } = require('../src/lib/file-utils');
+const { computeTruncation } = require('../src/engine/file-utils');
 
 // The receive-side cap — same value as `DRIVE_MANIFEST_MAX_FILES` in
 // lib/hyperdrive-manager.js. Kept local to the tests to avoid coupling

@@ -69,8 +69,30 @@ That's literally it. No registrations, no uploads to "the cloud," no waiting for
 git clone https://github.com/peardrive/PearDrop-Desktop.git
 cd PearDrop-Desktop
 npm install
-npm start
+npm run app          # build + run against the public DHT
 ```
+
+### Development
+
+| Command | What it does |
+|---|---|
+| `npm run bootstrap` | Start a fresh local HyperDHT bootstrapper on `127.0.0.1:8787` (`-- --lan`, `-- --host <ip> --port <n>`) |
+| `npm run dev` | Hot-reloading app wired to the local bootstrapper, isolated `dev` profile |
+| `npm run dev:peer` | A second dev instance (`dev-peer` profile) — send files between the two |
+| `npm run app` | Production build, public DHT (or the bootstrap set in Settings → Network) |
+| `npm run build` | Compile main, preload and renderer into `out/` |
+| `npm run build:win` / `build:mac` / `build:linux` / `build:all` | Installers into `dist/` (electron-builder) |
+| `npm run build:dir` | Unpacked app — fastest packaging smoke test |
+| `npm run typecheck` · `npm test` · `npm run check` | TypeScript, engine + unit tests, both |
+
+Typical local test: `npm run bootstrap` in one terminal, `npm run dev` and `npm run dev:peer` in two more.
+The CLI joins the same network with `PEARDROP_BOOTSTRAP=127.0.0.1:8787 peardrop share <file>`.
+
+### App identity
+
+Name, app id, description, copyright and logo live in **`app.config.json`**. The window title,
+OS app name, About section and installers all read it — rebranding means editing that one file
+(and replacing the PNG it points at; 1024×1024 recommended).
 
 ---
 
@@ -80,6 +102,10 @@ npm start
 - **Hyperdrive** - Distributed file system from the Hypercore Protocol
 - **Hyperswarm** - P2P networking that punches through NAT/firewalls
 - **Electron** - Cross-platform desktop app framework
+- **React + TypeScript + Tailwind** - UI, with a dark and a light theme
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the pieces fit, including how to plug in a
+different transfer backend.
 
 **No size limits:**
 - Streams files in chunks
@@ -128,11 +154,19 @@ This is how the internet was supposed to work.
 ## 📁 File Storage
 
 ```
-~/peardrop/
+~/.peardrop/
+├── downloads/           # Files you receive (files you share stay where they are)
 ├── drives/              # P2P drive data (auto-managed)
-├── drives-state.json    # Drive manifest (auto-recovers if corrupted)  
-└── downloads/           # Your downloaded files end up here
+├── drives-state.json    # Drive manifest
+├── preferences.json     # Settings: theme, network bootstrap, list view, debug
+├── library.json         # Favorites and display-name aliases
+├── window-state.json    # Last window size/position
+└── logs/                # peardrop-YYYY-MM-DD.log, last 14 days kept
 ```
+
+Dev profiles live under `~/.peardrop/profiles/<name>/`. `PEARDROP_HOME` moves the whole root.
+Data from older versions (`~/peardrop`) is migrated automatically on first launch; files already
+downloaded there stay in place and keep opening from the app.
 
 **Privacy note:** Files are only stored temporarily during transfer. When you stop sharing, the data gets cleaned up automatically.
 

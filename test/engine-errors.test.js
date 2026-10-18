@@ -18,7 +18,7 @@ const {
     FileStallError,
     wrapError,
     failure,
-} = require('../src/lib/engine-errors');
+} = require('../src/engine/engine-errors');
 
 // EngineError base class --- //
 

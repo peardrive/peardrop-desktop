@@ -1,17 +1,52 @@
 node_modules/
-.DS_Store
+
+out/
+dist/
+build/
+*.tsbuildinfo
+.vite/
+
+/electron
+/electron.exe
+/Electron.app/
+
+coverage/
+test-results/
+playwright-report/
+.eslintcache
+.cache/
+
 *.log
 debug-log-*.txt
-*.zip
+logs/
 
-# Local design reference material, not part of the shipped app
+.peardrop/
+peardrop-data/
+
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+
+*.zip
+*.bundle
+*.tgz
+
 REFERENCES/
 
-# Editor / OS leftovers
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
 *.backup
+*.tmp
+.DS_Store
 Thumbs.db
+desktop.ini
 
-# Build output (electron-builder et al. — not configured yet, but will be)
-dist/
-out/
-build/
+docs/internal/

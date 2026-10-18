@@ -7,7 +7,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
 
-const { normalizeUserPath } = require('../src/lib/file-utils');
+const { normalizeUserPath } = require('../src/engine/file-utils');
 
 const isWindows = process.platform === 'win32';
 

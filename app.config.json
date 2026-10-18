@@ -1,0 +1,12 @@
+{
+  "$comment": "App identity. Single source for the window title, About page, OS app name and installers (electron-builder.config.cjs). Change it here, not in code.",
+  "name": "peardrop",
+  "productName": "PearDrop",
+  "appId": "com.anjou.peardrop",
+  "description": "Simple, elegant P2P file sharing",
+  "author": "Anjou",
+  "homepage": "https://github.com/peardrive/peardrop-desktop",
+  "copyright": "Copyright © 2026 Anjou",
+  "icon": "assets/icons/peardrop-icon.png",
+  "linkScheme": "peardrop"
+}

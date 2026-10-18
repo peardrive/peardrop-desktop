@@ -19,17 +19,20 @@
  * showHelp() - Print usage info
  * formatBytes(bytes) - "1.2 MB" formatting
  * EXTERNAL CALLS:
- * ../src/lib/hyperdrive-manager.js (manager singleton)
+ * ../src/engine/hyperdrive-manager.js (manager singleton)
+ * ENVIRONMENT:
+ * PEARDROP_BOOTSTRAP=host:port - join a custom DHT (e.g. `npm run bootstrap`)
+ * PEARDROP_HOME / PEARDROP_PROFILE - data root (default ~/.peardrop) / named profile
  * KEY BEHAVIOR:
  * 'share' command stays running until Ctrl+C (SIGINT)
  * Outputs machine-parseable "LINK:" and "ID:" lines
  * Shows real-time peer connections and progress
  */
 
-const { manager } = require('../src/lib/hyperdrive-manager');
-const { downloadFromDrive } = require('../src/lib/downloader');
-const { normalizeUserPath } = require('../src/lib/file-utils');
-const { EngineError } = require('../src/lib/engine-errors');
+const { manager } = require('../src/engine/hyperdrive-manager');
+const { downloadFromDrive } = require('../src/engine/downloader');
+const { normalizeUserPath } = require('../src/engine/file-utils');
+const { EngineError } = require('../src/engine/engine-errors');
 const path = require('path');
 
 // Format an error for CLI output. Typed engine errors get their category
@@ -339,6 +342,11 @@ Examples:
 
 Note: When sharing folders, hidden files (.*), node_modules, and __pycache__ are excluded.
 Shares persist across restarts - use 'serve' to resume or 'stop' to clear.
+
+Environment:
+  PEARDROP_BOOTSTRAP=127.0.0.1:8787    Use a local DHT bootstrapper (npm run bootstrap)
+  PEARDROP_HOME=<dir>                  Data root (default ~/.peardrop)
+  PEARDROP_PROFILE=<name>              Isolated profile under <root>/profiles/<name>
 `);
 }
 
