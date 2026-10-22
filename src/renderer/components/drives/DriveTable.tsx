@@ -9,7 +9,7 @@ import { cn } from '../../lib/cn'
 import { CATEGORY_LABEL, categoryOf } from '../../lib/file-types'
 import { formatBytes } from '../../lib/format'
 import { isGroup, sourceName, statusPresentation } from '../../lib/drive-model'
-import { cancelRemoval, openDrive, runRowAction } from '../../controllers/drive-actions'
+import { cancelRemoval, runRowAction } from '../../controllers/drive-actions'
 import type { DriveItemModel } from '../../hooks/useDrives'
 import { useDrivesStore } from '../../stores/drives-store'
 import { Icon } from '../ui/Icon'
@@ -17,6 +17,8 @@ import { useMenu } from '../ui/Menu'
 import { ProgressBar } from '../ui/Progress'
 import { Badge } from '../ui/StatusText'
 import { DriveMenuButton } from './DriveMenuButton'
+import { DriveOpenTarget } from './DriveOpenTarget'
+import { DriveRevealButton } from './DriveRevealButton'
 import { CancellingOverlay, DeleteCountdown } from './DriveOverlays'
 import { DriveRowActions } from './DriveRowActions'
 import { DriveThumb } from './DriveThumb'
@@ -47,6 +49,7 @@ const DriveTableRow = memo(function DriveTableRow({ drive, highlighted }: { driv
   const ref = useRef<HTMLDivElement>(null)
   const pending = useDrivesStore((s) => s.pendingDeletes[drive.id])
   const cancelling = useDrivesStore((s) => s.cancelling.has(drive.id))
+  const busy = !!pending || cancelling
   const { label, tone } = statusPresentation(drive)
   const type = isGroup(drive) ? 'Folder' : CATEGORY_LABEL[categoryOf(sourceName(drive))]
   useEffect(() => {
@@ -56,7 +59,6 @@ const DriveTableRow = memo(function DriveTableRow({ drive, highlighted }: { driv
     <div
       ref={ref}
       role="row"
-      onClick={() => !pending && !cancelling && openDrive(drive)}
       onContextMenu={(e) => {
         e.preventDefault()
         if (!drive.isPlaceholder) menu.openAt({ x: e.clientX, y: e.clientY })
@@ -64,10 +66,22 @@ const DriveTableRow = memo(function DriveTableRow({ drive, highlighted }: { driv
       className={cn(COLS, 'relative rounded-lg border-b border-fg/[0.06] px-2 py-1.5 transition-colors hover:bg-fg/[0.04]', highlighted && 'animate-highlight')}
     >
       <div className="flex min-w-0 items-center gap-3">
-        <DriveThumb drive={drive} title={drive.title} size={28} className="rounded-[7px]" />
+        {drive.isPlaceholder ? (
+          <DriveThumb drive={drive} title={drive.title} size={28} className="rounded-[7px]" />
+        ) : (
+          <DriveOpenTarget drive={drive} disabled={busy} decorative className="shrink-0 rounded-[7px]">
+            <DriveThumb drive={drive} title={drive.title} size={28} className="rounded-[7px]" />
+          </DriveOpenTarget>
+        )}
         <div className="min-w-0">
-          <div className="flex items-center gap-1.5">
-            <span className="truncate text-[12px] font-semibold">{drive.title}</span>
+          <div className="flex min-w-0 items-center gap-1.5">
+            {drive.isPlaceholder ? (
+              <span className="truncate text-[12px] font-semibold">{drive.title}</span>
+            ) : (
+              <DriveOpenTarget drive={drive} disabled={busy} className="min-w-0 truncate text-[12px] font-semibold">
+                {drive.title}
+              </DriveOpenTarget>
+            )}
             {drive.favorite && <Icon name="star" className="h-3 w-3 shrink-0 text-star" />}
           </div>
           {drive.progress != null && drive.progress < 1 && (drive.status === 'downloading' || drive.status === 'sharing') && (
@@ -85,6 +99,7 @@ const DriveTableRow = memo(function DriveTableRow({ drive, highlighted }: { driv
       </span>
       <div className="flex items-center justify-end gap-1">
         <DriveRowActions drive={drive} onAction={(a) => runRowAction(a, drive)} />
+        <DriveRevealButton drive={drive} disabled={busy} />
         {!drive.isPlaceholder && <DriveMenuButton drive={drive} menu={menu} />}
       </div>
       {pending && <DeleteCountdown pending={pending} onUndo={() => cancelRemoval(drive.id)} />}

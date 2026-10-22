@@ -81,6 +81,11 @@ export function Menu({ open, anchor, onClose, items, align = 'end', insideRefs =
     <div
       ref={ref}
       role="menu"
+      // React passes events from a portal up to the component that rendered
+      // it. Without this, picking an item also "clicked" the drive card the
+      // menu belongs to, which opened the file.
+      onClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.stopPropagation()}
       className="no-drag glass fixed z-[1000] rounded-xl p-1 shadow-menu animate-pop-in"
       style={{ width, left: pos?.left ?? -9999, top: pos?.top ?? -9999 }}
     >

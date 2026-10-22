@@ -2,15 +2,16 @@
  * DriveCard — one share/download in the card grid.
  *
  * Thumbnail · title (+ gold star when favourited) · status line · progress
- * bar while transferring · contextual buttons · ⋮ menu. Click opens the file
- * (or the folder modal); right-click opens the menu at the pointer.
+ * bar while transferring · contextual buttons · folder icon · ⋮ menu. Clicking the
+ * thumbnail or the title opens the file (or the folder modal); the rest of
+ * the card does nothing on click. Right-click opens the menu at the pointer.
  *
  * @example <DriveCard drive={item} fileCount={matchCount} highlighted={id === highlightId} />
  */
 import { memo, useEffect, useRef } from 'react'
 import { cn } from '../../lib/cn'
 import { isInFlight } from '../../lib/drive-model'
-import { cancelRemoval, openDrive, runRowAction } from '../../controllers/drive-actions'
+import { cancelRemoval, runRowAction } from '../../controllers/drive-actions'
 import type { DriveItemModel } from '../../hooks/useDrives'
 import { useDrivesStore } from '../../stores/drives-store'
 import { Icon } from '../ui/Icon'
@@ -19,6 +20,8 @@ import { ProgressBar } from '../ui/Progress'
 import { Spinner } from '../ui/Spinner'
 import { VIcon } from '../ui/VIcon'
 import { DriveMenuButton } from './DriveMenuButton'
+import { DriveOpenTarget } from './DriveOpenTarget'
+import { DriveRevealButton } from './DriveRevealButton'
 import { CancellingOverlay, DeleteCountdown } from './DriveOverlays'
 import { DriveRowActions } from './DriveRowActions'
 import { DriveStatusLine } from './DriveStatusLine'
@@ -48,7 +51,6 @@ export const DriveCard = memo(function DriveCard({ drive, fileCount, highlighted
     <div
       ref={ref}
       data-drive-id={drive.id}
-      onClick={() => !busy && openDrive(drive)}
       onContextMenu={(e) => {
         e.preventDefault()
         if (!busy && !drive.isPlaceholder) menu.openAt({ x: e.clientX, y: e.clientY })
@@ -68,14 +70,22 @@ export const DriveCard = memo(function DriveCard({ drive, fileCount, highlighted
           )}
         </div>
       ) : (
-        <DriveThumb drive={drive} title={drive.title} size={40} />
+        <DriveOpenTarget drive={drive} disabled={busy} decorative className="shrink-0 rounded-[9px]">
+          <DriveThumb drive={drive} title={drive.title} size={40} />
+        </DriveOpenTarget>
       )}
 
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <div className="flex min-w-0 items-center gap-1">
-          <span className="truncate text-[13px] font-semibold text-fg" title={drive.title}>
-            {drive.title}
-          </span>
+          {drive.isPlaceholder ? (
+            <span className="truncate text-[13px] font-semibold text-fg" title={drive.title}>
+              {drive.title}
+            </span>
+          ) : (
+            <DriveOpenTarget drive={drive} disabled={busy} className="min-w-0 truncate text-[13px] font-semibold text-fg">
+              {drive.title}
+            </DriveOpenTarget>
+          )}
           {drive.favorite && <Icon name="star" className="h-3 w-3 shrink-0 text-star" label="Favorite" />}
         </div>
         <DriveStatusLine drive={drive} fileCount={fileCount} />
@@ -83,6 +93,7 @@ export const DriveCard = memo(function DriveCard({ drive, fileCount, highlighted
       </div>
 
       <DriveRowActions drive={drive} onAction={(a) => runRowAction(a, drive)} />
+      <DriveRevealButton drive={drive} disabled={busy} />
       {!drive.isPlaceholder && <DriveMenuButton drive={drive} menu={menu} />}
 
       {pending && <DeleteCountdown pending={pending} onUndo={() => cancelRemoval(drive.id)} />}
