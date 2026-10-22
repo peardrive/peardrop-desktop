@@ -21,6 +21,7 @@
 import { app, BrowserWindow, dialog, nativeTheme } from 'electron'
 import type { AppCommand, IpcPushChannel, IpcPushMap } from '@shared/ipc'
 import { themeScheme, type Preferences } from '@shared/preferences'
+import type { StopProgress } from '@engine/backend'
 import { LEGACY_ROOT, type PeardropPaths } from '@engine/paths'
 import { identity } from './app-identity'
 import { EngineHost } from '@engine/engine-host'
@@ -28,13 +29,14 @@ import { registerIpc, windowState } from './ipc/register'
 import { push } from './ipc/typed-ipc'
 import type { Logger, LogManager } from './logger'
 import { migrateLegacyData } from './migration'
+import { QuitWindow, type QuitProgress } from './quit-window'
 import type { RuntimeConfig } from './runtime'
 import { NetworkMonitor } from './services/network-monitor'
 import { ReceiveQueue } from './services/receive-queue'
 import { LibraryStore } from './stores/library-store'
 import { PreferencesStore } from './stores/preferences-store'
 import { AppTray, applyLoginItem, launchedHidden } from './tray'
-import { createMainWindow } from './window'
+import { createMainWindow, currentWindowChrome } from './window'
 
 export interface PearDropAppOptions {
   runtime: RuntimeConfig
@@ -59,6 +61,33 @@ const WINDOW_STATE_EVENTS = [
  * Time a just-loaded renderer gets to boot and subscribe before a command is pushed.
  */
 const RENDERER_BOOT_DELAY_MS = 300
+
+/** Quit anyway if the engine has not stopped by then (a drive that hangs on close). */
+const QUIT_TIMEOUT_MS = 10_000
+
+/** The quit window's progress while the engine stops. The last 10% is "saving and closing". */
+function engineStopProgress({ done, total }: StopProgress): QuitProgress {
+  if (total === 0) {
+    return { label: 'Stopping the network…', percent: 90 }
+  }
+
+  const noun = total === 1 ? 'share' : 'shares'
+  return {
+    label: `Stopping ${noun}… ${done} of ${total}`,
+    percent: Math.round((done / total) * 90)
+  }
+}
+
+/** Resolves true if `promise` settles within `ms`, false if the time runs out first. */
+function settlesWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms)
+  })
+  const settled = promise.then(() => true, () => true)
+
+  return Promise.race([settled, timeout]).finally(() => clearTimeout(timer))
+}
 
 /**
  * Light or dark window fill, matching the theme's canvas family.
@@ -88,6 +117,9 @@ export class PearDropApp {
    * Progress of the engine shutdown that runs before the process exits.
    */
   private cleanup: 'idle' | 'running' | 'done' = 'idle'
+
+  /** Windows is logging off or shutting down: quit silently, no quit window. */
+  private sessionEnding = false
 
   constructor(opts: PearDropAppOptions) {
     this.runtime = opts.runtime
@@ -283,6 +315,7 @@ export class PearDropApp {
     // Windows logoff/shutdown: let the window really close so the OS is not blocked.
     win.on('session-end', () => {
       this.quitting = true
+      this.sessionEnding = true
     })
 
     return win
@@ -376,16 +409,37 @@ export class PearDropApp {
   }
 
   private async cleanUpThenQuit(): Promise<void> {
+    const quitWindow = this.sessionEnding
+      ? null
+      : new QuitWindow({
+        chrome: currentWindowChrome(),
+        alwaysShow: this.runtime.quitWindow === 'always'
+      })
+    quitWindow?.scheduleShow()
+
     try {
       // force: skip the DHT unannounce. Announcements expire on their own, and
       // waiting for them is most of the quit time.
-      await this.engine?.stop({ force: true })
-      this.log.info('Engine stopped cleanly on quit')
+      const stopping = this.engine?.stop({
+        force: true,
+        onProgress: (progress) => quitWindow?.update(engineStopProgress(progress))
+      })
+
+      const stopped = await settlesWithin(stopping ?? Promise.resolve(), QUIT_TIMEOUT_MS)
+      if (stopped) {
+        this.log.info('Engine stopped cleanly on quit')
+      } else {
+        this.log.warn('Engine did not stop in time — quitting anyway', { timeoutMs: QUIT_TIMEOUT_MS })
+      }
     } catch (err) {
       this.log.error('Cleanup error', err)
     } finally {
+      quitWindow?.update({ label: 'Saving and closing…', percent: 100 })
       this.tray?.destroy()
       this.logs.flush()
+
+      await quitWindow?.close()
+
       this.cleanup = 'done'
       app.quit()
     }

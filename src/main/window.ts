@@ -3,7 +3,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { app, BrowserWindow, screen } from 'electron'
+import { app, BrowserWindow, nativeTheme, screen } from 'electron'
 import type { WindowFrame } from '@shared/app-info'
 import { WINDOWS_TITLEBAR_HEIGHT, type WindowChrome } from '@shared/ipc'
 import { identity, resolveIconPath } from './app-identity'
@@ -103,6 +103,16 @@ function chromeOptions(): Partial<Electron.BrowserWindowConstructorOptions> {
 
 /** Colours last sent by the renderer, so a re-created window starts right. */
 let lastChrome: WindowChrome | null = null
+
+/** The active theme's window colours (or a light/dark default before the renderer sent any). */
+export function currentWindowChrome(): WindowChrome {
+  if (lastChrome) {
+    return lastChrome
+  }
+  return nativeTheme.shouldUseDarkColors
+    ? { background: '#08080d', foreground: '#f3f4f6' }
+    : { background: '#f4f4f5', foreground: '#18181b' }
+}
 
 const HEX = /^#[0-9a-f]{6}$/i
 

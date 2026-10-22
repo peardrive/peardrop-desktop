@@ -147,6 +147,16 @@ export class HyperdriveBackend implements TransferBackend {
   async stop(opts: BackendStopOptions = {}): Promise<void> {
     const force = opts.force === true
 
+    // One step per pending connection and per open drive, reported as each
+    // one finishes (in parallel, so in whatever order they complete).
+    const total = this.manager.pendingConnections.size + this.manager.activeDrives.size
+    let done = 0
+    const stepDone = () => {
+      done++
+      opts.onProgress?.({ done, total })
+    }
+    opts.onProgress?.({ done, total })
+
     for (const abort of this.downloadAborters.values()) {
       try {
         abort()
@@ -160,8 +170,8 @@ export class HyperdriveBackend implements TransferBackend {
     // persistState:false — shutdown/reload must not demote drives to PAUSED,
     // so they auto-resume and re-announce on the next start.
     await Promise.all([
-      this.manager.abortAllConnections({ force }).catch(() => undefined),
-      this.manager.stopAll({ delete: false, persistState: opts.persistState ?? false, force })
+      this.manager.abortAllConnections({ force }, stepDone).catch(() => undefined),
+      this.manager.stopAll({ delete: false, persistState: opts.persistState ?? false, force }, stepDone)
     ])
     for (const [event, fn] of this.managerListeners) {
       this.manager.removeListener(event, fn)

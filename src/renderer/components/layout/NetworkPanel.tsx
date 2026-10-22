@@ -1,13 +1,17 @@
 /**
  * NetworkPanel — the status card at the bottom of the sidebar.
  *
- * Compact (Figma): signal bars + state · peer count, then outbound and
- * inbound speed stacked in a column. Clicking it opens the extension with the details the design leaves
- * out: connected peers, inbound and outbound speed with labels, what moved
- * this session and which DHT the engine is on. In the expanded sidebar the
+ * Compact (Figma): signal bars + state, then outbound and inbound speed
+ * stacked in a column. Clicking it opens the extension with the details the
+ * design leaves out: inbound and outbound speed with labels, what moved this
+ * session and which DHT the engine is on. In the expanded sidebar the
  * extension unfolds in place above the card (and the choice is remembered);
- * in the folded sidebar the card shows bars + peers and the details open in
- * a popover beside it.
+ * in the folded sidebar the card shows the bars and the details open in a
+ * popover beside it.
+ *
+ * There is no peer count: every drive runs its own swarm, so one remote
+ * device shows up once per drive it is connected to and the total means
+ * nothing.
  *
  * @example <NetworkPanel collapsed={false} />
  */
@@ -55,13 +59,13 @@ function SignalBars({ level }: { level: Level }) {
 const speedText = (bps: number) => formatSpeed(bps) || '0 B/s'
 
 function Details({ stats, engine }: { stats: NetworkStats; engine: EngineStatus | null }) {
-  const network = !engine
-    ? '—'
-    : engine.bootstrapSource === 'public'
-      ? 'Public DHT'
-      : formatBootstrapList(engine.bootstrap) || 'Custom bootstrap'
+  // One line per bootstrap node, so a host:port is never split across lines.
+  const networkLines = !engine
+    ? ['—']
+    : engine.bootstrapSource === 'public' || engine.bootstrap.length === 0
+      ? [engine.bootstrapSource === 'public' ? 'Public DHT' : 'Custom bootstrap']
+      : engine.bootstrap.map((node) => formatBootstrapList([node]))
   const rows: Array<[string, React.ReactNode, string?]> = [
-    ['Peers', stats.peers, `${stats.peers} connected peer${stats.peers === 1 ? '' : 's'}${stats.connections !== stats.peers ? ` over ${stats.connections} connections` : ''}`],
     [
       'Inbound',
       <span key="in" className="text-inbound">
@@ -77,8 +81,7 @@ function Details({ stats, engine }: { stats: NetworkStats; engine: EngineStatus 
       'Upload speed, all shares'
     ],
     ['Received', formatBytes(stats.totalIn), 'since the engine started'],
-    ['Sent', formatBytes(stats.totalOut), 'since the engine started'],
-    ['Network', network]
+    ['Sent', formatBytes(stats.totalOut), 'since the engine started']
   ]
   return (
     <dl className="flex flex-col gap-1.5 text-[10px]">
@@ -88,6 +91,16 @@ function Details({ stats, engine }: { stats: NetworkStats; engine: EngineStatus 
           <dd className="tabular min-w-0 truncate text-right font-semibold text-fg">{v}</dd>
         </div>
       ))}
+      {/* Label above the value: a host:port list needs the full width and
+          wraps instead of being cut off. */}
+      <div className="flex min-w-0 flex-col gap-0.5" title={networkLines.join(', ')}>
+        <dt className="font-medium text-muted">Network</dt>
+        {networkLines.map((line) => (
+          <dd key={line} className="tabular font-semibold text-fg [overflow-wrap:anywhere]">
+            {line}
+          </dd>
+        ))}
+      </div>
     </dl>
   )
 }
@@ -117,7 +130,7 @@ export function NetworkPanel({ collapsed }: { collapsed: boolean }) {
   const buttonRef = useRef<HTMLButtonElement>(null)
   const level = connectionLevel(engine, stats)
   const toggle = () => (collapsed ? setPopover((o) => !o) : void update({ layout: { networkDetails: !expanded } }))
-  const title = `${level.label} · ${stats.peers} peer${stats.peers === 1 ? '' : 's'} · ↓ ${speedText(stats.inbound)} · ↑ ${speedText(stats.outbound)}`
+  const title = `${level.label} · ↓ ${speedText(stats.inbound)} · ↑ ${speedText(stats.outbound)}`
 
   if (collapsed) {
     return (
@@ -133,10 +146,6 @@ export function NetworkPanel({ collapsed }: { collapsed: boolean }) {
         >
           <span className="flex h-[30px] items-center">
             <SignalBars level={level} />
-          </span>
-          <span className="tabular flex items-center gap-1 text-[10px] font-semibold leading-[18px] text-fg">
-            <VIcon name="profile-2user" size={12} />
-            {stats.peers}
           </span>
         </button>
         {popover && (
@@ -165,14 +174,10 @@ export function NetworkPanel({ collapsed }: { collapsed: boolean }) {
           <Details stats={stats} engine={engine} />
         </div>
       )}
-      <div className="flex w-full items-center justify-between">
+      <div className="flex w-full items-center">
         <span className="flex h-[30px] items-center gap-2 overflow-hidden py-1.5">
           <SignalBars level={level} />
           <span className={cn('truncate text-[10px] font-semibold leading-[18px]', TONE_TEXT[level.tone])}>{level.label}</span>
-        </span>
-        <span className="tabular flex items-center gap-1 text-[10px] font-semibold leading-[18px] text-fg" title="Connected peers">
-          <VIcon name="profile-2user" size={12} />
-          {stats.peers}
         </span>
       </div>
       {!expanded && (

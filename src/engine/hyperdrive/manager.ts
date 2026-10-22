@@ -163,13 +163,13 @@ export class HyperdriveManager extends EventEmitter implements EngineContext {
    * Abort every pending connection and wait for all their cleanups, so the
    * process never exits halfway through deleting a folder or saving the list.
    */
-  async abortAllConnections(options: { force?: boolean } = {}): Promise<void> {
+  async abortAllConnections(options: { force?: boolean } = {}, onAborted?: () => void): Promise<void> {
     const cleanups: Promise<void>[] = []
 
     for (const driveId of Array.from(this.pendingConnections.keys())) {
       const cleanup = this.abortPending(driveId, options)
       if (cleanup) {
-        cleanups.push(cleanup)
+        cleanups.push(cleanup.finally(() => onAborted?.()))
       }
     }
 
@@ -238,7 +238,7 @@ export class HyperdriveManager extends EventEmitter implements EngineContext {
    * Stop every open drive at once. Drives share nothing, so this takes as
    * long as the slowest drive, not the sum of all of them.
    */
-  async stopAll(options: StopDriveOptions = { delete: false }): Promise<void> {
+  async stopAll(options: StopDriveOptions = { delete: false }, onDriveStopped?: () => void): Promise<void> {
     const driveIds = Array.from(this.activeDrives.keys())
     console.log('[HyperdriveManager] Stopping all drives', {
       count: driveIds.length,
@@ -246,7 +246,9 @@ export class HyperdriveManager extends EventEmitter implements EngineContext {
     })
 
     // allSettled: one drive failing to close must not leave the others running.
-    const results = await Promise.allSettled(driveIds.map((driveId) => this.stopDrive(driveId, options)))
+    const results = await Promise.allSettled(driveIds.map((driveId) => {
+      return this.stopDrive(driveId, options).finally(() => onDriveStopped?.())
+    }))
 
     const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
     for (const result of failed) {

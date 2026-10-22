@@ -127,6 +127,12 @@ export interface TransferBackend {
   remove(driveId: string, opts?: { deleteFiles?: boolean }): Promise<SimpleResult>
 }
 
+/** How far a stop has got: one step per open drive and per pending connection. */
+export interface StopProgress {
+  done: number
+  total: number
+}
+
 export interface BackendStopOptions {
   /** false (quit/reload): leave persisted states untouched so drives resume next start. */
   persistState?: boolean
@@ -135,6 +141,8 @@ export interface BackendStopOptions {
    * Announcements then expire on their own. For app quit only.
    */
   force?: boolean
+  /** Called once with the total, then after every step that finishes. */
+  onProgress?: (progress: StopProgress) => void
 }
 
 export type BackendFactory = (ctx: BackendContext) => TransferBackend

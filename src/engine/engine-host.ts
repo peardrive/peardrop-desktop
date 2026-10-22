@@ -16,10 +16,17 @@ import { EventEmitter } from 'node:events'
 import { formatBootstrapList, parseBootstrapList, type BootstrapNode } from '@shared/bootstrap'
 import type { EngineReloadRequest, EngineReloadResult, EngineStatus } from '@shared/engine'
 import type { TransferEvent } from '@shared/transfer'
-import type { NetworkCounters, TransferBackend } from './backend'
+import type { NetworkCounters, StopProgress, TransferBackend } from './backend'
 import type { Logger } from './logger'
 import type { PeardropPaths } from './paths'
 import { BACKENDS, DEFAULT_BACKEND } from './registry'
+
+export interface EngineStopOptions {
+  /** Skip the DHT goodbyes (app quit only). */
+  force?: boolean
+  /** Progress of the stop, for the quit window. */
+  onProgress?: (progress: StopProgress) => void
+}
 
 /**
  * Where the user's custom bootstrap list is kept. The app backs this with
@@ -173,15 +180,15 @@ export class EngineHost extends EventEmitter {
    * `force` skips the DHT goodbyes for a fast app quit. Reload never forces,
    * because it re-announces right away.
    */
-  stop(opts: { force?: boolean } = {}): Promise<void> {
+  stop(opts: EngineStopOptions = {}): Promise<void> {
     return this.serialize(() => this.stopInternal(opts))
   }
 
-  private async stopInternal(opts: { force?: boolean } = {}): Promise<void> {
+  private async stopInternal(opts: EngineStopOptions = {}): Promise<void> {
     const backend = this.backend
     if (!backend) return
     try {
-      await backend.stop({ persistState: false, force: opts.force === true })
+      await backend.stop({ persistState: false, force: opts.force === true, onProgress: opts.onProgress })
     } catch (err) {
       this.log.error('Engine stop failed', err)
     } finally {

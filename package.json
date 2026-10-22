@@ -16,6 +16,7 @@
     "dev": "cross-env PEARDROP_BOOTSTRAP=127.0.0.1:8787 PEARDROP_PROFILE=dev electron-vite dev",
     "dev:peer": "cross-env PEARDROP_BOOTSTRAP=127.0.0.1:8787 PEARDROP_PROFILE=dev-peer electron-vite dev",
     "dev:mac": "cross-env PEARDROP_BOOTSTRAP=127.0.0.1:8787 PEARDROP_PROFILE=dev PEARDROP_WINDOW_FRAME=mac electron-vite dev",
+    "dev:quit-window": "cross-env PEARDROP_BOOTSTRAP=127.0.0.1:8787 PEARDROP_PROFILE=dev PEARDROP_QUIT_WINDOW=always electron-vite dev",
     "bootstrap": "node scripts/bootstrapper.mjs",
     "postinstall": "node scripts/ensure-electron.cjs",
     "setup:electron": "node scripts/ensure-electron.cjs",

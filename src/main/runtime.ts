@@ -28,6 +28,11 @@ export interface RuntimeConfig {
    * Data root override ($PEARDROP_HOME). 
   */
   home: string | undefined
+  /**
+   * When the quit window appears ($PEARDROP_QUIT_WINDOW): 'auto' only for a
+   * slow quit, 'always' on every quit (to see or test it).
+   */
+  quitWindow: 'auto' | 'always'
 }
 
 export function readRuntimeConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
@@ -44,6 +49,7 @@ export function readRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
     isDev,
     profile,
     envBootstrap,
-    home: env.PEARDROP_HOME || undefined
+    home: env.PEARDROP_HOME || undefined,
+    quitWindow: (env.PEARDROP_QUIT_WINDOW || '').trim() === 'always' ? 'always' : 'auto'
   }
 }
