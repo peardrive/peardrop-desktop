@@ -24,7 +24,8 @@ import { DriveRowActions } from './DriveRowActions'
 import { DriveThumb } from './DriveThumb'
 
 // Type and size need a wide window; name, status and actions always fit.
-const COLS = 'grid grid-cols-[minmax(0,1fr)_minmax(0,124px)_96px] lg:grid-cols-[minmax(0,1fr)_90px_72px_124px_96px] items-center gap-3'
+// Last column: row buttons + folder icon + ⋮ menu.:q
+const COLS = 'grid grid-cols-[minmax(0,1fr)_minmax(0,124px)_124px] lg:grid-cols-[minmax(0,1fr)_90px_72px_124px_124px] items-center gap-3'
 
 export function DriveTable({ items, highlightId }: { items: DriveItemModel[]; highlightId: string | null }) {
   return (
