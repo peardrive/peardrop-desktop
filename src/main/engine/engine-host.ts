@@ -139,16 +139,20 @@ export class EngineHost extends EventEmitter {
     await starting
   }
 
-  /** Stop the backend; `persistState:false` leaves drives set to resume next start. */
-  stop(): Promise<void> {
-    return this.serialize(() => this.stopInternal())
+  /**
+   * Stop the backend; `persistState:false` leaves drives set to resume next start.
+   * `force` skips the DHT goodbyes for a fast app quit. Reload never forces,
+   * because it re-announces right away.
+   */
+  stop(opts: { force?: boolean } = {}): Promise<void> {
+    return this.serialize(() => this.stopInternal(opts))
   }
 
-  private async stopInternal(): Promise<void> {
+  private async stopInternal(opts: { force?: boolean } = {}): Promise<void> {
     const backend = this.backend
     if (!backend) return
     try {
-      await backend.stop({ persistState: false })
+      await backend.stop({ persistState: false, force: opts.force === true })
     } catch (err) {
       this.log.error('Engine stop failed', err)
     } finally {

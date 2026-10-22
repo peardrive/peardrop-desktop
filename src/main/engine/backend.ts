@@ -87,7 +87,7 @@ export interface TransferBackend {
    * Leave the network and close storage. `persistState: false` (quit/reload)
    * must leave persisted states untouched so drives resume next start.
    */
-  stop(opts?: { persistState?: boolean }): Promise<void>
+  stop(opts?: BackendStopOptions): Promise<void>
   /** Subscribe to backend events. Returns an unsubscribe function. */
   onEvent(listener: (event: TransferEvent) => void): () => void
 
@@ -125,6 +125,16 @@ export interface TransferBackend {
   pause(driveId: string): Promise<SimpleResult & { record?: DriveRecord }>
   resume(driveId: string): Promise<SimpleResult & { record?: DriveRecord }>
   remove(driveId: string, opts?: { deleteFiles?: boolean }): Promise<SimpleResult>
+}
+
+export interface BackendStopOptions {
+  /** false (quit/reload): leave persisted states untouched so drives resume next start. */
+  persistState?: boolean
+  /**
+   * Skip network goodbyes (DHT unannounce) for the fastest possible stop.
+   * Announcements then expire on their own. For app quit only.
+   */
+  force?: boolean
 }
 
 export type BackendFactory = (ctx: BackendContext) => TransferBackend

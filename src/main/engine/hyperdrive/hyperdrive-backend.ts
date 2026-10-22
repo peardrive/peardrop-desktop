@@ -38,6 +38,7 @@ import type { Logger } from '../../logger'
 import {
   ShareCancelledError,
   type BackendContext,
+  type BackendStopOptions,
   type CreateShareInput,
   type CreateShareOutput,
   type NetworkCounters,
@@ -133,13 +134,9 @@ export class HyperdriveBackend implements TransferBackend {
     this.log.info('Ready', { drives: this.manager.getAllDriveEntries().length, resumeFailures })
   }
 
-  async stop(opts: { persistState?: boolean } = {}): Promise<void> {
-    // Abort anything still connecting so stopAll does not wait on it.
-    try {
-      this.manager.abortAllConnections()
-    } catch {
-      /* best effort */
-    }
+  async stop(opts: BackendStopOptions = {}): Promise<void> {
+    const force = opts.force === true
+
     for (const abort of this.downloadAborters.values()) {
       try {
         abort()
@@ -147,9 +144,15 @@ export class HyperdriveBackend implements TransferBackend {
         /* best effort */
       }
     }
+
+    // Connections still being set up and live drives are independent, so both
+    // are torn down at the same time, and both are awaited.
     // persistState:false — shutdown/reload must not demote drives to PAUSED,
     // so they auto-resume and re-announce on the next start.
-    await this.manager.stopAll({ delete: false, persistState: opts.persistState ?? false })
+    await Promise.all([
+      this.manager.abortAllConnections({ force }).catch(() => undefined),
+      this.manager.stopAll({ delete: false, persistState: opts.persistState ?? false, force })
+    ])
     for (const [event, fn] of this.managerListeners) this.manager.removeListener(event, fn)
     this.managerListeners.length = 0
     this.announced.clear()

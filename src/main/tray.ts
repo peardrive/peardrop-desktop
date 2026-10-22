@@ -48,6 +48,7 @@ export class AppTray {
     this.tray.setToolTip(identity.productName)
     this.tray.setContextMenu(
       Menu.buildFromTemplate([
+        { label: 'Open App', click: () => this.opts.showWindow() },
         { label: 'Send…', click: () => this.opts.runCommand('send') },
         { label: 'Receive…', click: () => this.opts.runCommand('receive') },
         { type: 'separator' },

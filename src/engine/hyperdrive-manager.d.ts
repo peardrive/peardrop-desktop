@@ -56,6 +56,15 @@ export interface HyperdriveManagerOptions {
   createSwarm?: () => unknown
 }
 
+export interface StopDriveOptions {
+  /** Remove the drive completely (storage folder and manifest entry). */
+  delete?: boolean
+  /** Write PAUSED to the manifest (default true). False on shutdown/reload. */
+  persistState?: boolean
+  /** Leave the swarm without unannouncing from the DHT. App quit only. */
+  force?: boolean
+}
+
 export interface OpenDriveResult {
   driveId: string
   files: Array<{ name: string; displayName?: string; size: number }>
@@ -83,10 +92,10 @@ export class HyperdriveManager extends EventEmitter {
   ): Promise<{ driveId: string; shareLink: string; key: string }>
   cancelShare(driveId: string): boolean
   openDrive(shareLink: string): Promise<OpenDriveResult>
-  stopDrive(driveId: string, options?: { delete?: boolean; persistState?: boolean }): Promise<void>
-  stopAll(options?: { delete?: boolean; persistState?: boolean }): Promise<void>
-  abortConnection(driveId: string): boolean
-  abortAllConnections(): void
+  stopDrive(driveId: string, options?: StopDriveOptions): Promise<void>
+  stopAll(options?: StopDriveOptions): Promise<void>
+  abortConnection(driveId: string, options?: { force?: boolean }): boolean
+  abortAllConnections(options?: { force?: boolean }): Promise<void>
   addDriveEntry(data: Record<string, unknown>): Promise<ManifestDriveEntry>
   removeDriveEntry(id: string, opts?: { deleteFiles?: boolean; deleteStorage?: boolean }): Promise<boolean>
   pauseDriveEntry(id: string): Promise<ManifestDriveEntry | null>

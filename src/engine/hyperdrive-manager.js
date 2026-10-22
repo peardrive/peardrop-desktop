@@ -153,27 +153,44 @@ class HyperdriveManager extends EventEmitter {
   }
   
   /**
-   * Abort a pending connection attempt
+   * Abort a pending connection attempt. Its cleanup runs in the background.
+   * @param {string} driveId
+   * @param {Object} [options]
+   * @param {boolean} [options.force] - Skip the DHT unannounce (app quit only)
+   * @returns {boolean} Whether a pending connection was found
    */
-  abortConnection(driveId) {
-    const pending = this.pendingConnections.get(driveId)
-    if (pending) {
-      console.log('[HyperdriveManager] Aborting connection', { driveId })
-      pending.aborted = true
-      if (pending.cleanup) pending.cleanup()
-      this.pendingConnections.delete(driveId)
-      return true
-    }
-    return false
+  abortConnection(driveId, options = {}) {
+    return this._abortPending(driveId, options) !== null
   }
-  
+
   /**
-   * Abort all pending connections
+   * Abort every pending connection and wait until all their cleanups finish,
+   * so the process never exits halfway through deleting a folder or saving
+   * the manifest.
+   * @param {Object} [options]
+   * @param {boolean} [options.force] - Skip the DHT unannounce (app quit only)
    */
-  abortAllConnections() {
-    for (const [driveId] of this.pendingConnections) {
-      this.abortConnection(driveId)
+  async abortAllConnections(options = {}) {
+    const cleanups = []
+    for (const driveId of Array.from(this.pendingConnections.keys())) {
+      const cleanup = this._abortPending(driveId, options)
+      if (cleanup) cleanups.push(cleanup)
     }
+    await Promise.allSettled(cleanups)
+  }
+
+  /**
+   * @returns {Promise<void>|null} The cleanup in progress, or null if nothing was pending
+   */
+  _abortPending(driveId, { force = false } = {}) {
+    const pending = this.pendingConnections.get(driveId)
+    if (!pending) return null
+
+    console.log('[HyperdriveManager] Aborting connection', { driveId })
+    pending.aborted = true
+    const cleanup = Promise.resolve(pending.cleanup ? pending.cleanup({ force }) : undefined)
+    this.pendingConnections.delete(driveId)
+    return cleanup
   }
 
   /**
@@ -546,6 +563,9 @@ class HyperdriveManager extends EventEmitter {
    *   (Bug fixed 2026-07-03: quit used to persist PAUSED for every drive, so
    *   each graceful quit permanently demoted all shares and nothing announced
    *   on the next boot.)
+   * @param {boolean} options.force - Leave the swarm without unannouncing from
+   *   the DHT (default: false). Saves ~1 s per drive; the stale announcement
+   *   expires on its own. Only for app quit: pause/delete must withdraw it.
    */
   async stopDrive(driveId, options = { delete: false }) {
     const session = this.activeDrives.get(driveId)
@@ -572,7 +592,7 @@ class HyperdriveManager extends EventEmitter {
 
     // Leave swarm
     if (session.swarm) {
-      await session.swarm.destroy()
+      await session.swarm.destroy({ force: options.force === true })
     }
     
     // Close drive first
@@ -751,9 +771,9 @@ class HyperdriveManager extends EventEmitter {
     const pendingConnection = {
       driveId,
       aborted: false,
-      cleanup: async () => {
+      cleanup: async ({ force = false } = {}) => {
         try {
-          await swarm.destroy()
+          await swarm.destroy({ force })
           await drive.close()
           await store.close()
           await fs.rm(drivePath, { recursive: true, force: true })
@@ -1425,17 +1445,25 @@ class HyperdriveManager extends EventEmitter {
   }
 
   /**
-   * Stop all active drives
+   * Stop all active drives at once. Drives share nothing (each has its own
+   * swarm, Corestore and folder), so this takes as long as the slowest drive,
+   * not the sum of all of them. Takes the same options as stopDrive().
    */
   async stopAll(options = { delete: false }) {
-    console.log('[HyperdriveManager] Stopping all drives')
-    
     const driveIds = Array.from(this.activeDrives.keys())
-    for (const driveId of driveIds) {
-      await this.stopDrive(driveId, options)
+    console.log('[HyperdriveManager] Stopping all drives', { count: driveIds.length, force: options.force === true })
+
+    // allSettled: one drive failing to close must not leave the others running.
+    const results = await Promise.allSettled(driveIds.map((driveId) => {
+      return this.stopDrive(driveId, options)
+    }))
+
+    const failed = results.filter((r) => r.status === 'rejected')
+    for (const r of failed) {
+      console.warn('[HyperdriveManager] Drive failed to stop', r.reason?.message ?? r.reason)
     }
-    
-    console.log('[HyperdriveManager] All drives stopped', { count: driveIds.length })
+
+    console.log('[HyperdriveManager] All drives stopped', { count: driveIds.length, failed: failed.length })
   }
 
   /**
@@ -1443,21 +1471,7 @@ class HyperdriveManager extends EventEmitter {
    */
   async cleanupManifest() {
     const toRemove = []
-    
-    for (const [driveId, metadata] of Object.entries(this.manifest.drives)) {
-      if (false) { // No more PURGED state - drives are deleted immediately
-        // Verify storage is actually deleted
-        try {
-          await fs.access(metadata.storagePath)
-          // Storage still exists, try to delete
-          await fs.rm(metadata.storagePath, { recursive: true, force: true })
-        } catch {
-          // Storage doesn't exist or was deleted - good
-        }
-        toRemove.push(driveId)
-      }
-    }
-    
+
     for (const driveId of toRemove) {
       delete this.manifest.drives[driveId]
     }
@@ -1798,9 +1812,9 @@ class HyperdriveManager extends EventEmitter {
     const pendingConnection = {
       driveId,
       aborted: false,
-      cleanup: async () => {
+      cleanup: async ({ force = false } = {}) => {
         try {
-          await swarm.destroy()
+          await swarm.destroy({ force })
           await drive.close()
           await store.close()
           // NOTE: Don't delete storage path on cleanup - this is a resume, not new download
