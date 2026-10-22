@@ -53,6 +53,15 @@ PearDrop:
 2. Click **"DOWNLOAD"**
 3. **Files appear** in your downloads folder
 
+If the sender is offline, the link waits in your list ("Waiting for sender") and PearDrop keeps
+looking for them in the background — even after you quit and reopen the app — until the
+download is done.
+
+### Running in the background
+Closing the window keeps PearDrop running in the tray (menu bar on macOS), so your shares stay
+reachable and downloads keep going. The tray menu has **Send…**, **Receive…** and **Quit**.
+Both this and "Start when you sign in" can be switched in Settings → Background.
+
 That's literally it. No registrations, no uploads to "the cloud," no waiting for some server to process your stuff.
 
 ---
@@ -69,8 +78,30 @@ That's literally it. No registrations, no uploads to "the cloud," no waiting for
 git clone https://github.com/peardrive/PearDrop-Desktop.git
 cd PearDrop-Desktop
 npm install
-npm start
+npm run app          # build + run against the public DHT
 ```
+
+### Development
+
+| Command | What it does |
+|---|---|
+| `npm run bootstrap` | Start a fresh local HyperDHT bootstrapper on `127.0.0.1:8787` (`-- --lan`, `-- --host <ip> --port <n>`) |
+| `npm run dev` | Hot-reloading app wired to the local bootstrapper, isolated `dev` profile |
+| `npm run dev:peer` | A second dev instance (`dev-peer` profile) — send files between the two |
+| `npm run dev:mac` | Same as `dev`, with the macOS window chrome (frameless, in-app traffic lights) on any OS |
+| `npm run app` | Production build, public DHT (or the bootstrap set in Settings → Network) |
+| `npm run build` | Compile main, preload and renderer into `out/` |
+| `npm run build:win` / `build:mac` / `build:linux` / `build:all` | Installers into `dist/` (electron-builder) |
+| `npm run build:dir` | Unpacked app — fastest packaging smoke test |
+| `npm run typecheck` · `npm test` · `npm run check` | TypeScript, tests (vitest), both |
+
+Typical local test: `npm run bootstrap` in one terminal, `npm run dev` and `npm run dev:peer` in two more.
+
+### App identity
+
+Name, app id, description, copyright and logo live in **`app.config.json`**. The window title,
+OS app name, About section and installers all read it — rebranding means editing that one file
+(and replacing the PNG it points at; 1024×1024 recommended).
 
 ---
 
@@ -80,6 +111,10 @@ npm start
 - **Hyperdrive** - Distributed file system from the Hypercore Protocol
 - **Hyperswarm** - P2P networking that punches through NAT/firewalls
 - **Electron** - Cross-platform desktop app framework
+- **React + TypeScript + Tailwind** - UI, with a dark and a light theme
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the pieces fit, including how to plug in a
+different transfer backend.
 
 **No size limits:**
 - Streams files in chunks
@@ -114,8 +149,10 @@ This is how the internet was supposed to work.
 - **Cross-platform** - Windows, Mac, Linux
 - **Clean UI** - Dark theme with glassmorphism design
 - **Progress tracking** - See real transfer speeds and progress
-- **CLI tool** - Command line interface for automation
 - **QR codes** - Scan links with your phone camera
+- **Remembered links** - Pasted links wait for an offline sender, across restarts
+- **Background mode** - Lives in the tray with Send, Receive and Quit
+- **Live network panel** - Connected peers, inbound and outbound speed in the sidebar
 
 ### 🔮 Coming Soon
 - **Mobile apps** - iOS and Android clients
@@ -128,11 +165,20 @@ This is how the internet was supposed to work.
 ## 📁 File Storage
 
 ```
-~/peardrop/
+~/.peardrop/
+├── downloads/           # Files you receive (files you share stay where they are)
 ├── drives/              # P2P drive data (auto-managed)
-├── drives-state.json    # Drive manifest (auto-recovers if corrupted)  
-└── downloads/           # Your downloaded files end up here
+├── drives-state.json    # Drive manifest
+├── preferences.json     # Settings: theme, network bootstrap, list view, layout, background, debug
+├── library.json         # Favorites and display-name aliases
+├── receive-queue.json   # Pasted links still waiting for their sender
+├── window-state.json    # Last window size/position
+└── logs/                # peardrop-YYYY-MM-DD.log, last 14 days kept
 ```
+
+Dev profiles live under `~/.peardrop/profiles/<name>/`. `PEARDROP_HOME` moves the whole root.
+Data from older versions (`~/peardrop`) is migrated automatically on first launch; files already
+downloaded there stay in place and keep opening from the app.
 
 **Privacy note:** Files are only stored temporarily during transfer. When you stop sharing, the data gets cleaned up automatically.
 
