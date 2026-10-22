@@ -17,8 +17,8 @@ export function ConfirmDialog({ spec, onClose, isTop }: { spec: ConfirmSpec; onC
   const [checked, setChecked] = useState(!!spec.checkbox?.checked)
   return (
     <Modal size="narrow" onClose={onClose} isTop={isTop} hideClose bodyClassName="pt-6">
-      <h2 className="text-lg font-bold">{spec.title}</h2>
-      {spec.message && <p className="mt-2 break-words text-sm leading-relaxed text-muted">{spec.message}</p>}
+      <h2 className="text-[14px] font-bold">{spec.title}</h2>
+      {spec.message && <p className="mt-2 break-words text-[12px] leading-relaxed text-muted">{spec.message}</p>}
       {spec.checkbox && <Checkbox className="mt-5" checked={checked} onChange={setChecked} label={spec.checkbox.label} hint={spec.checkbox.hint} />}
       <div className="mt-6 flex justify-end gap-3">
         {spec.buttons.map((b, i) => (

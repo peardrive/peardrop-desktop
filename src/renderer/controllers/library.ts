@@ -12,6 +12,7 @@ import type { DriveRecord, LibrarySnapshot } from '@shared/transfer'
 import { toDriveView, type DriveView } from '../lib/drive-model'
 import { api } from '../services/client'
 import { drivesStore } from '../stores/drives-store'
+import { isQueueOwned } from '../stores/receive-store'
 
 const INITIATING_TIMEOUT_MS = 5 * 60 * 1000
 const watchdogs = new Map<string, ReturnType<typeof setTimeout>>()
@@ -53,6 +54,8 @@ export function upsertRecord(record: DriveRecord, opts: { resumeError?: { error:
   if (previous && (previous.status === 'downloading' || previous.status === 'connecting') && view.status === 'interrupted') {
     view.status = previous.status
   }
+  // The receive queue is still working on it: connecting, not parked.
+  if (view.status === 'interrupted' && isQueueOwned(view.id)) view.status = 'connecting'
   s.upsert(view, { prepend: opts.prepend })
   if (view.status === 'initiating') armInitiatingWatchdog(view.id)
   return view
@@ -65,9 +68,11 @@ export function applySnapshot(snapshot: LibrarySnapshot) {
   // ids must not keep cards green.
   s.resetAnnounced(snapshot.announced)
   const announced = new Set(snapshot.announced)
-  const views = snapshot.drives.map((r) =>
-    toDriveView(r, { announced, resumeError: snapshot.resumeErrors[r.id] ?? null, previous: s.drives[r.id] ?? null })
-  )
+  const views = snapshot.drives.map((r) => {
+    const v = toDriveView(r, { announced, resumeError: snapshot.resumeErrors[r.id] ?? null, previous: s.drives[r.id] ?? null })
+    if (v.status === 'interrupted' && isQueueOwned(v.id)) v.status = 'connecting'
+    return v
+  })
   s.replaceAll(views)
   for (const v of views) {
     if (v.status === 'initiating') armInitiatingWatchdog(v.id)

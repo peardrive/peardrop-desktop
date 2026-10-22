@@ -12,26 +12,25 @@
  */
 import type { ReactNode } from 'react'
 import { cn } from '../../lib/cn'
-import { useSettingsStore } from '../../stores/settings-store'
 import { Icon, type IconName } from '../../components/ui/Icon'
 import { IconButton } from '../../components/ui/IconButton'
 
+/** Same height and type as the list header, so switching pages does not jump. */
 export function PageHeader({ title, onBack }: { title: string; onBack: () => void }) {
-  const isMac = useSettingsStore((s) => s.appInfo?.platform === 'darwin')
   return (
-    <header className={cn('drag-region sticky top-0 z-10 flex items-center gap-3 bg-panel/90 px-8 pb-4 backdrop-blur', isMac ? 'pt-10' : 'pt-6')}>
-      <IconButton icon="chevron-left" label="Back" onClick={onBack} className="no-drag -ml-2" />
-      <h1 className="text-[26px] font-bold">{title}</h1>
+    <header className="drag-region sticky top-0 z-10 flex h-[70px] items-center gap-2 bg-canvas/90 px-4 py-4 backdrop-blur">
+      <IconButton icon="chevron-left" label="Back" onClick={onBack} className="no-drag -ml-1" />
+      <h1 className="text-[18px] font-semibold leading-7">{title}</h1>
     </header>
   )
 }
 
 export function SettingsSection({ title, description, children }: { title: string; description?: ReactNode; children: ReactNode }) {
   return (
-    <section className="mt-8 first:mt-2">
-      <h2 className="text-sm font-bold text-muted">{title}</h2>
-      {description && <p className="mt-1 text-sm text-subtle">{description}</p>}
-      <div className="mt-3 divide-y divide-line/60 rounded-2xl bg-fg/[0.035] px-4">{children}</div>
+    <section className="mt-6 first:mt-1">
+      <h2 className="text-[12px] font-semibold text-muted">{title}</h2>
+      {description && <p className="mt-0.5 text-[11px] text-subtle">{description}</p>}
+      <div className="mt-2 divide-y divide-fg/[0.07] rounded-xl bg-gradient-to-b from-panel to-panel/60 px-3">{children}</div>
     </section>
   )
 }
@@ -50,24 +49,24 @@ export function SettingsRow({ icon, label, description, control, onClick, stacke
   const body = (
     <>
       {icon && (
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent/15 text-accent-strong">
-          <Icon name={icon} className="h-[18px] w-[18px]" />
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent/15 text-accent-strong">
+          <Icon name={icon} className="h-3.5 w-3.5" />
         </span>
       )}
       <div className="min-w-0 flex-1">
-        <div className="text-[15px] font-semibold text-fg">{label}</div>
-        {description && <div className="mt-0.5 text-[13px] leading-snug text-muted">{description}</div>}
-        {stacked && control && <div className="mt-3">{control}</div>}
+        <div className="text-[12px] font-semibold text-fg">{label}</div>
+        {description && <div className="mt-0.5 text-[11px] leading-snug text-muted">{description}</div>}
+        {stacked && control && <div className="mt-2">{control}</div>}
       </div>
       {!stacked && control}
-      {onClick && !control && <Icon name="chevron-right" className="h-4 w-4 text-subtle" />}
+      {onClick && !control && <Icon name="chevron-right" className="h-3.5 w-3.5 text-subtle" />}
     </>
   )
   return onClick ? (
-    <button type="button" onClick={onClick} className="flex w-full items-center gap-4 py-3.5 text-left transition-opacity hover:opacity-80">
+    <button type="button" onClick={onClick} className="flex w-full items-center gap-3 py-2.5 text-left transition-opacity hover:opacity-80">
       {body}
     </button>
   ) : (
-    <div className={cn('flex gap-4 py-3.5', stacked ? 'items-start' : 'items-center')}>{body}</div>
+    <div className={cn('flex gap-3 py-2.5', stacked ? 'items-start' : 'items-center')}>{body}</div>
   )
 }

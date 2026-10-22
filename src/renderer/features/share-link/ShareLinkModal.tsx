@@ -15,11 +15,11 @@ export function ShareLinkModal({ link, title, onClose, isTop }: { link: string; 
   const { copied, copy } = useCopy()
   return (
     <Modal title="Share link" size="compact" onClose={onClose} isTop={isTop}>
-      {title && <p className="-mt-1 truncate text-sm text-muted">{title}</p>}
-      <div className="mx-auto mt-5 flex h-[220px] w-[220px] items-center justify-center rounded-2xl bg-white p-3 shadow-[0_8px_30px_rgba(0,0,0,0.25)]">
+      {title && <p className="-mt-1 truncate text-[12px] text-muted">{title}</p>}
+      <div className="mx-auto mt-5 flex h-[180px] w-[180px] items-center justify-center rounded-xl bg-white p-3 shadow-[0_8px_30px_rgba(0,0,0,0.25)]">
         {qr ? <img src={qr} alt="QR code for the share link" className="h-full w-full [image-rendering:pixelated]" /> : <Spinner className="h-6 w-6 text-black/40" />}
       </div>
-      <p className="mt-3 text-center text-xs text-muted">Scan with PearDrop on another device</p>
+      <p className="mt-3 text-center text-[11px] text-muted">Scan with PearDrop on another device</p>
       <div className="mt-4 select-text break-all rounded-xl border-2 border-line bg-field px-4 py-3 font-mono text-[12.5px] leading-relaxed text-fg/90">{link}</div>
       <div className="mt-5 flex gap-3">
         <Button variant="primary" className="flex-1" onClick={() => void copy(link)}>

@@ -8,9 +8,11 @@
  * `window.peardrop` is missing.
  */
 import { formatBootstrapList, parseBootstrapList } from '@shared/bootstrap'
-import type { EngineStatus } from '@shared/engine'
+import type { EngineStatus, NetworkStats } from '@shared/engine'
 import type { PeardropApi } from '@shared/ipc'
 import { EMPTY_LIBRARY, type LibraryData } from '@shared/library'
+import { extractShareLink } from '@shared/links'
+import type { ReceiveTask } from '@shared/receive'
 import { DEFAULT_PREFERENCES, mergePreferences, type Preferences } from '@shared/preferences'
 import type { DriveRecord, TransferEvent } from '@shared/transfer'
 
@@ -51,7 +53,7 @@ export function createMockClient(): PeardropApi {
   const params = new URLSearchParams(location.search)
   const drives = new Map<string, DriveRecord>((params.has('empty') ? [] : seed()).map((d) => [d.id, d]))
   const announced = new Set(['d1', 'd3'])
-  let prefs: Preferences = mergePreferences(DEFAULT_PREFERENCES, { appearance: { theme: (params.get('theme') as 'dark' | 'light') ?? 'dark' } })
+  let prefs: Preferences = mergePreferences(DEFAULT_PREFERENCES, { appearance: { theme: (params.get('theme') as Preferences['appearance']['theme']) ?? 'void' } })
   let library: LibraryData = { ...EMPTY_LIBRARY, favorites: ['d5'], aliases: { d5: 'Summer photos' } }
   const listeners = new Set<(e: TransferEvent) => void>()
   const prefListeners = new Set<(p: Preferences) => void>()
@@ -75,6 +77,26 @@ export function createMockClient(): PeardropApi {
   const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
   const snapshot = () => ({ drives: [...drives.values()], announced: [...announced], resumeErrors: {} })
 
+  // Receive queue: one link whose sender is offline (links ending in 0000 never resolve).
+  let tasks: ReceiveTask[] = params.has('empty')
+    ? []
+    : [{ id: 'rx_seed', link: `peardrop://${'ab'.repeat(30)}0000`, addedAt: now - 300000, phase: 'waiting', driveId: null, name: null, attempts: 3, lastAttemptAt: now - 60000, nextAttemptAt: now + 120000, lastError: 'Sender is offline or not reachable yet' }]
+  const receiveListeners = new Set<(t: ReceiveTask[]) => void>()
+  const setTasks = (next: ReceiveTask[]) => {
+    tasks = next
+    receiveListeners.forEach((l) => l(tasks))
+  }
+  const patchTask = (id: string, patch: Partial<ReceiveTask>) => setTasks(tasks.map((t) => (t.id === id ? { ...t, ...patch } : t)))
+
+  // Network panel: a gently varying load.
+  const statsListeners = new Set<(s: NetworkStats) => void>()
+  let stats: NetworkStats = { peers: 3, connections: 4, inbound: 3.8 * 1024 * 1024, outbound: 1.2 * 1024 * 1024, totalIn: 0, totalOut: 0, at: now }
+  setInterval(() => {
+    const wobble = () => 0.8 + Math.random() * 0.4
+    stats = { ...stats, inbound: Math.round(3.8 * 1024 * 1024 * wobble()), outbound: Math.round(1.2 * 1024 * 1024 * wobble()), at: Date.now() }
+    statsListeners.forEach((l) => l(stats))
+  }, 1000)
+
   // A live upload on d1 so speed/peers show.
   setTimeout(() => {
     emit({ type: 'peer-connected', driveId: 'd1', peerId: 'a1b2c3', publicKey: hex('peer1'), at: Date.now() })
@@ -90,7 +112,7 @@ export function createMockClient(): PeardropApi {
   }, 1500)
   setTimeout(() => emit({ type: 'drive-announced', driveId: 'd5' }), 2500)
 
-  return {
+  const this_: PeardropApi = {
     transfers: {
       snapshot: async () => snapshot(),
       async share(req) {
@@ -181,6 +203,60 @@ export function createMockClient(): PeardropApi {
       pick: async () => [`${HOME}/Documents/presentation.pptx`, `${HOME}/Pictures/team.jpg`],
       pathForFile: (f) => `${HOME}/Desktop/${f.name}`
     },
+    receive: {
+      list: async () => tasks,
+      async add(raw) {
+        const l = extractShareLink(raw)
+        if (!l) return { status: 'invalid', error: 'Invalid link' }
+        const pending = tasks.find((t) => t.link === l)
+        if (pending) return { status: 'pending', task: pending }
+        const dup = [...drives.values()].find((d) => d.shareLink === l)
+        if (dup) return { status: 'duplicate', driveId: dup.id, isUpload: dup.isUpload }
+        const task: ReceiveTask = { id: `rx_${Date.now()}`, link: l, addedAt: Date.now(), phase: 'searching', driveId: null, name: null, attempts: 1, lastAttemptAt: Date.now(), nextAttemptAt: null, lastError: null }
+        setTasks([task, ...tasks])
+        if (l.endsWith('0000')) {
+          setTimeout(() => patchTask(task.id, { phase: 'waiting', nextAttemptAt: Date.now() + 15000, lastError: 'Sender is offline or not reachable yet' }), 2500)
+        } else {
+          setTimeout(async () => {
+            const driveId = `recv_${Date.now()}`
+            const files = [{ name: 'shared-notes.pdf', size: 48_000_000 }]
+            const record: DriveRecord = { id: driveId, name: 'shared-notes.pdf', state: 'seeking', isUpload: false, totalBytes: 48_000_000, files, shareLink: l, createdAt: Date.now() }
+            drives.set(driveId, record)
+            patchTask(task.id, { phase: 'downloading', driveId, name: record.name })
+            emit({ type: 'drive-added', record })
+            await this_.transfers.download({ driveId })
+            setTasks(tasks.filter((t) => t.id !== task.id))
+          }, 2500)
+        }
+        return { status: 'queued', task }
+      },
+      async remove(id) {
+        setTasks(tasks.filter((t) => t.id !== id))
+        return { success: true }
+      },
+      async retry(id) {
+        tasks.filter((t) => !id || t.id === id).forEach((t) => patchTask(t.id, { phase: 'searching', attempts: t.attempts + 1, lastAttemptAt: Date.now(), nextAttemptAt: null }))
+        setTimeout(() => tasks.filter((t) => !t.driveId).forEach((t) => patchTask(t.id, { phase: 'waiting', nextAttemptAt: Date.now() + 15000 })), 2000)
+        return { success: true }
+      },
+      onChange: (cb) => {
+        receiveListeners.add(cb)
+        return () => receiveListeners.delete(cb)
+      }
+    },
+    window: {
+      state: async () => ({ maximized: false, fullScreen: false, focused: true }),
+      act: async () => ({ maximized: false, fullScreen: false, focused: true }),
+      onState: () => () => undefined,
+      setChrome: async () => undefined
+    },
+    network: {
+      stats: async () => stats,
+      onStats: (cb) => {
+        statsListeners.add(cb)
+        return () => statsListeners.delete(cb)
+      }
+    },
     qr: {
       async generate(text) {
         // A deterministic pseudo-QR so the layout can be judged without the qrcode lib.
@@ -211,12 +287,15 @@ export function createMockClient(): PeardropApi {
         version: '0.29.0',
         platform: 'win32',
         arch: 'x64',
+        // ?frame=mac previews the Mac window chrome in the browser.
+        windowFrame: (params.get('frame') as 'mac' | 'windows' | 'native' | null) ?? 'windows',
         versions: { electron: '28.3.3', chrome: '120', node: '18.18' },
         iconDataUrl: null,
         isDev: true,
         profile: null,
         paths: { root: `${HOME}/.peardrop`, downloads: `${HOME}/.peardrop/downloads`, logs: `${HOME}/.peardrop/logs`, preferences: `${HOME}/.peardrop/preferences.json` }
-      })
+      }),
+      onCommand: () => () => undefined
     },
     settings: {
       get: async () => prefs,
@@ -281,4 +360,5 @@ export function createMockClient(): PeardropApi {
       write: async () => undefined
     }
   }
+  return this_
 }

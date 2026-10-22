@@ -52,11 +52,11 @@ export function FolderModal({ driveId, onClose, isTop }: { driveId: string; onCl
   return (
     <Modal onClose={onClose} isTop={isTop} footer={<Button variant="secondary" onClick={onClose}>Done</Button>}>
       <div className="flex items-center gap-4 pb-4">
-        <FolderGlyph className="h-14 w-14" />
+        <FolderGlyph className="h-10 w-10" />
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-xl font-bold">{drive.title}</h2>
-          <div className="text-sm text-muted">{files.length ? `${plural(files.length, 'file')} · ${formatBytes(total)}` : 'Empty folder'}</div>
-          <StatusText tone={tone} className="text-sm">
+          <h2 className="truncate text-[15px] font-bold">{drive.title}</h2>
+          <div className="text-[12px] text-muted">{files.length ? `${plural(files.length, 'file')} · ${formatBytes(total)}` : 'Empty folder'}</div>
+          <StatusText tone={tone} className="text-[12px]">
             {label}
           </StatusText>
         </div>
@@ -67,9 +67,9 @@ export function FolderModal({ driveId, onClose, isTop }: { driveId: string; onCl
         )}
       </div>
       <SearchField value={query} onChange={setQuery} placeholder="Search in this folder" />
-      <div className="mt-1 h-5 px-4 text-sm font-semibold text-warning">{query && !shown.length && files.length > 0 ? `No files match “${query.trim()}”` : ''}</div>
+      <div className="mt-1 h-5 px-4 text-[12px] font-semibold text-warning">{query && !shown.length && files.length > 0 ? `No files match “${query.trim()}”` : ''}</div>
       {files.length === 0 ? (
-        <p className="py-10 text-center text-sm text-muted">This folder has no files yet.</p>
+        <p className="py-10 text-center text-[12px] text-muted">This folder has no files yet.</p>
       ) : (
         <div className="grid grid-cols-2 gap-x-6 gap-y-0.5">
           {shown.map((f) => (

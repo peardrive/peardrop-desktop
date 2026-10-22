@@ -6,6 +6,7 @@
  * These rules are ported from the pre-React renderer, including the
  * reasoning behind them (kept as comments where it isn't obvious).
  */
+import type { ReceiveTaskPhase } from '@shared/receive'
 import type { DriveFile, DriveRecord } from '@shared/transfer'
 import { CATEGORY_LABEL, categoryOf } from './file-types'
 
@@ -54,8 +55,10 @@ export interface DriveView {
   shareLink?: string
   localPath?: string | null
   addedAt: number | null
-  /** Placeholder row shown while a pasted link is connecting. */
+  /** Placeholder row for a pasted link whose sender has not been reached yet. */
   isPlaceholder?: boolean
+  /** Placeholder only: where the receive queue stands with it. */
+  receive?: { phase: ReceiveTaskPhase; attempts: number; nextAttemptAt: number | null; lastError: string | null }
 }
 
 export type Tone = 'success' | 'warning' | 'danger' | 'muted'
@@ -148,8 +151,13 @@ export function toDriveView(
 const pct = (d: Pick<DriveView, 'progress'>) => (d.progress != null ? Math.round(d.progress * 100) : null)
 
 /** Text + tone of the status line ("Downloading (42%)", "Active", …). */
-export function statusPresentation(d: Pick<DriveView, 'status' | 'progress' | 'speed'>): { label: string; tone: Tone; moving: boolean } {
+export function statusPresentation(d: Pick<DriveView, 'status' | 'progress' | 'speed' | 'receive'>): { label: string; tone: Tone; moving: boolean } {
   const p = pct(d)
+  if (d.receive) {
+    return d.receive.phase === 'searching'
+      ? { label: 'Looking for sender…', tone: 'warning', moving: false }
+      : { label: 'Waiting for sender', tone: 'warning', moving: false }
+  }
   switch (d.status) {
     case 'downloading':
       return { label: p != null ? `Downloading (${p}%)` : 'Downloading', tone: 'warning', moving: true }
@@ -196,17 +204,19 @@ export function isInFlight(d: Pick<DriveView, 'status' | 'progress'>): boolean {
   return d.status === 'downloading' || d.status === 'connecting' || d.status === 'interrupted' || (d.status === 'sharing' && p != null && p < 100)
 }
 
-export type RowAction = 'resume' | 'cancel' | 'retry' | 'open' | 'reshare' | 'clear'
+export type RowAction = 'resume' | 'cancel' | 'retry' | 'open' | 'reshare' | 'clear' | 'search'
 
 /**
  * The inline buttons right of a card (before the ⋮ menu):
- * interrupted → ▶ resume + ✕ cancel · in flight → ✕ cancel ·
+ * queued link → ⟳ look now + ✕ forget · interrupted → ▶ resume + ✕ cancel · in flight → ✕ cancel ·
  * failed → Retry (Resume for a partial download) · lost share → Share + Clear ·
  * folder → none (click opens it) · otherwise → Open.
  * A stopped SHARE is not a failure, so it gets Open, not Retry.
  */
-export function rowActions(d: Pick<DriveView, 'status' | 'progress' | 'kind' | 'files'>): RowAction[] {
+export function rowActions(d: Pick<DriveView, 'status' | 'progress' | 'kind' | 'files' | 'receive'>): RowAction[] {
   const p = pct(d)
+  // A queued link: "look now" while it waits for the next attempt, ✕ forgets it.
+  if (d.receive) return d.receive.phase === 'waiting' ? ['search', 'cancel'] : ['cancel']
   if (d.status === 'interrupted') return ['resume', 'cancel']
   if (d.status === 'downloading' || d.status === 'connecting' || (d.status === 'sharing' && p != null && p < 100)) return ['cancel']
   if (d.status === 'lost') return ['reshare', 'clear']

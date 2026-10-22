@@ -108,7 +108,7 @@ export function NetworkSettings() {
               leadingIcon="link"
               className="font-mono"
             />
-            <div className="flex min-h-[20px] items-center justify-between gap-3 px-1 text-xs">
+            <div className="flex min-h-[20px] items-center justify-between gap-3 px-1 text-[11px]">
               <span className={parsed.ok ? 'text-muted' : 'font-semibold text-danger'}>
                 {parsed.ok ? (parsed.nodes.length ? `${parsed.nodes.length} node${parsed.nodes.length > 1 ? 's' : ''}` : 'Public DHT') : parsed.error}
               </span>

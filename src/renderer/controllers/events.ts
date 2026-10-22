@@ -10,7 +10,10 @@ import { toast, useToastStore } from '../stores/toast-store'
 import { useMetaStore } from '../stores/meta-store'
 import { applySnapshot, clearInitiatingWatchdog, markAnnounced, upsertRecord } from './library'
 import { runDownload, userStarted } from './receive'
+import { isQueueOwned } from '../stores/receive-store'
 import { statusForResumeError } from '../lib/drive-model'
+
+const failureToasted = new Set<string>()
 
 export function handleTransferEvent(e: TransferEvent): void {
   const s = drivesStore()
@@ -87,11 +90,25 @@ export function handleTransferEvent(e: TransferEvent): void {
     }
 
     case 'drive-ready-to-download': {
-      // Continue only what the user asked for this session; a drive resumed
-      // at boot parks as "Disconnected" and waits for Resume.
-      const asked = userStarted.has(e.driveId)
+      // Continue only what the user asked for: resumed this session, or a
+      // link still in the receive queue (main starts that download itself).
+      // Any other drive resumed at boot parks as "Disconnected" and waits.
+      const owned = isQueueOwned(e.driveId)
+      const asked = owned || userStarted.has(e.driveId)
       s.patch(e.driveId, { status: asked ? 'downloading' : 'interrupted', ...(e.shareName ? { name: e.shareName } : {}) })
-      if (asked) void runDownload(e.driveId)
+      if (asked && !owned) void runDownload(e.driveId)
+      return
+    }
+
+    case 'download-failed': {
+      const d = s.drives[e.driveId]
+      if (!d || s.cancelling.has(e.driveId)) return
+      s.patch(e.driveId, { status: e.willRetry ? 'connecting' : 'error', speed: 0 })
+      // Background retries can fail repeatedly; say it once per drive.
+      if (!failureToasted.has(e.driveId)) {
+        failureToasted.add(e.driveId)
+        toast.error(e.willRetry ? `${e.error} — PearDrop will keep trying` : e.error)
+      }
       return
     }
 

@@ -7,8 +7,8 @@
 import { create } from 'zustand'
 
 export type Page = 'main' | 'settings' | 'report-bug'
-export type ListTab = 'shares' | 'favorites'
-export type KindFilter = 'all' | 'share' | 'download'
+/** Sidebar lists: everything, my shares, what I received, starred. */
+export type ListTab = 'all' | 'shares' | 'received' | 'favorites'
 export type StatusFilter = 'any' | 'active' | 'transferring' | 'attention'
 
 export interface ConfirmButton {
@@ -41,13 +41,11 @@ interface UiState {
   page: Page
   tab: ListTab
   search: string
-  kindFilter: KindFilter
   statusFilter: StatusFilter
   modals: ModalEntry[]
   setPage(page: Page): void
   setTab(tab: ListTab): void
   setSearch(q: string): void
-  setKindFilter(f: KindFilter): void
   setStatusFilter(f: StatusFilter): void
   openModal(spec: ModalSpec): number
   closeModal(key?: number): void
@@ -59,15 +57,13 @@ let seq = 0
 
 export const useUiStore = create<UiState>((set, get) => ({
   page: 'main',
-  tab: 'shares',
+  tab: 'all',
   search: '',
-  kindFilter: 'all',
   statusFilter: 'any',
   modals: [],
   setPage: (page) => set({ page }),
   setTab: (tab) => set({ tab }),
   setSearch: (search) => set({ search }),
-  setKindFilter: (kindFilter) => set({ kindFilter }),
   setStatusFilter: (statusFilter) => set({ statusFilter }),
   openModal(spec) {
     const key = ++seq

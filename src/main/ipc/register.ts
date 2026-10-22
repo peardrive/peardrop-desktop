@@ -6,6 +6,8 @@ import fs from 'node:fs/promises'
 import { app, dialog, shell, type BrowserWindow } from 'electron'
 import QRCode from 'qrcode'
 import type { AppInfo } from '@shared/app-info'
+import type { WindowState } from '@shared/ipc'
+import { applyWindowChrome, resolveWindowFrame } from '../window'
 import type { ShareResult } from '@shared/transfer'
 import type { PeardropPaths } from '../../engine/paths'
 import { identity, iconDataUrl } from '../app-identity'
@@ -14,6 +16,8 @@ import type { EngineHost } from '../engine/engine-host'
 import type { Logger, LogManager } from '../logger'
 import type { RuntimeConfig } from '../runtime'
 import { pathsExist, statPaths } from '../services/file-stats'
+import type { NetworkMonitor } from '../services/network-monitor'
+import type { ReceiveQueue } from '../services/receive-queue'
 import { buildShareInput, EmptyShareError } from '../services/share-input'
 import { thumbnailFor } from '../services/thumbnails'
 import type { LibraryStore } from '../stores/library-store'
@@ -24,11 +28,18 @@ export interface IpcDeps {
   engine: EngineHost
   preferences: PreferencesStore
   library: LibraryStore
+  receiveQueue: ReceiveQueue
+  network: NetworkMonitor
   logs: LogManager
   log: Logger
   paths: PeardropPaths
   runtime: RuntimeConfig
   getWindow: () => BrowserWindow | null
+}
+
+export function windowState(win: BrowserWindow | null): WindowState {
+  if (!win || win.isDestroyed()) return { maximized: false, fullScreen: false, focused: false }
+  return { maximized: win.isMaximized(), fullScreen: win.isFullScreen(), focused: win.isFocused() }
 }
 
 export function registerIpc(d: IpcDeps): void {
@@ -64,6 +75,12 @@ export function registerIpc(d: IpcDeps): void {
   handle('transfers:pause', (id) => withEngine((b) => b.pause(id)), log)
   handle('transfers:resume', (id) => withEngine((b) => b.resume(id)), log)
   handle('transfers:remove', (id, opts) => withEngine((b) => b.remove(id, opts)), log)
+
+  // ── receive queue ────────────────────────────────────────────────────
+  handle('receive:list', () => d.receiveQueue.list())
+  handle('receive:add', (link) => d.receiveQueue.add(link), log)
+  handle('receive:remove', (id) => d.receiveQueue.remove(id), log)
+  handle('receive:retry', (id) => d.receiveQueue.retry(id))
 
   // ── local files ──────────────────────────────────────────────────────
   handle('files:stat', (paths) => statPaths(paths, log), log)
@@ -116,6 +133,7 @@ export function registerIpc(d: IpcDeps): void {
       version: app.getVersion(),
       platform: process.platform,
       arch: process.arch,
+      windowFrame: resolveWindowFrame(),
       versions: { electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node },
       iconDataUrl: iconDataUrl(),
       isDev: d.runtime.isDev,
@@ -137,6 +155,35 @@ export function registerIpc(d: IpcDeps): void {
   // ── engine ───────────────────────────────────────────────────────────
   handle('engine:status', () => d.engine.getStatus())
   handle('engine:reload', (req) => d.engine.reload(req ?? {}), log)
+  handle('network:stats', () => d.network.get())
+
+  // ── window controls (frameless window) ───────────────────────────────
+  handle('window:state', () => windowState(d.getWindow()))
+  handle('window:set-chrome', (chrome) => {
+    const win = d.getWindow()
+    if (win) applyWindowChrome(win, chrome)
+  })
+  handle('window:action', (action) => {
+    const win = d.getWindow()
+    if (!win || win.isDestroyed()) return windowState(null)
+    switch (action) {
+      case 'close':
+        // Same path as the OS close button: hides to the tray when enabled.
+        win.close()
+        break
+      case 'minimize':
+        win.minimize()
+        break
+      case 'toggle-full-screen':
+        win.setFullScreen(!win.isFullScreen())
+        break
+      case 'toggle-maximize':
+        if (win.isMaximized()) win.unmaximize()
+        else win.maximize()
+        break
+    }
+    return windowState(win)
+  })
 
   // ── logs ─────────────────────────────────────────────────────────────
   handle('logs:path', () => d.logs.currentFile())

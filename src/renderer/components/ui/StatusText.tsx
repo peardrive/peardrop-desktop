@@ -31,5 +31,5 @@ export function Badge({ tone, children, className }: { tone: Tone; children: Rea
     danger: 'bg-danger/15 text-danger',
     muted: 'bg-fg/10 text-muted'
   }
-  return <span className={cn('inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-bold', bg[tone], className)}>{children}</span>
+  return <span className={cn('inline-flex items-center whitespace-nowrap rounded-full px-2 py-px text-[10px] font-semibold', bg[tone], className)}>{children}</span>
 }

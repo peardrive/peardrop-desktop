@@ -106,7 +106,7 @@ export function ReceiveModal({ onClose, isTop }: { onClose: () => void; isTop: b
   const label = { empty: 'Paste', valid: 'Download', existing: 'Show in list', invalid: 'Clear' }[state.kind]
   const hint =
     state.kind === 'valid'
-      ? { text: 'Press Enter to download', cls: 'text-success' }
+      ? { text: 'Press Enter to download — if the sender is offline, PearDrop keeps trying', cls: 'text-success' }
       : state.kind === 'existing'
         ? { text: state.message, cls: 'text-warning' }
         : state.kind === 'invalid'
@@ -124,8 +124,8 @@ export function ReceiveModal({ onClose, isTop }: { onClose: () => void; isTop: b
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && submit()}
           state={state.kind === 'valid' ? 'valid' : state.kind === 'invalid' ? 'invalid' : state.kind === 'existing' ? 'warning' : 'default'}
-          containerClassName="h-14 pr-2"
-          className="text-[15px]"
+          containerClassName="h-10 pr-2"
+          className="text-[13px]"
           trailing={
             <Button
               size="sm"
@@ -136,25 +136,25 @@ export function ReceiveModal({ onClose, isTop }: { onClose: () => void; isTop: b
             </Button>
           }
         />
-        <div className={cn('mt-2 h-5 px-4 text-sm font-semibold', hint?.cls)} aria-live="polite">
+        <div className={cn('mt-2 h-5 px-4 text-[12px] font-semibold', hint?.cls)} aria-live="polite">
           {hint?.text}
         </div>
       </div>
 
-      <div className="my-4 flex items-center gap-3 text-xs font-bold uppercase tracking-wider text-subtle">
+      <div className="my-4 flex items-center gap-3 text-[11px] font-bold uppercase tracking-wider text-subtle">
         <span className="h-px flex-1 bg-fg/10" /> or <span className="h-px flex-1 bg-fg/10" />
       </div>
 
       <button
         type="button"
         onClick={() => useUiStore.getState().openModal({ type: 'qr-scanner', onResult: (t) => fromQr(t, 'QR code') })}
-        className="group flex min-h-[180px] flex-1 flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-fg/15 bg-fg/[0.03] text-muted transition-colors hover:border-accent/50 hover:bg-accent/[0.06] hover:text-fg"
+        className="group flex min-h-[180px] flex-1 flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-fg/15 bg-fg/[0.03] text-muted transition-colors hover:border-accent/50 hover:bg-accent/[0.06] hover:text-fg"
       >
-        <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-fg/10 transition-colors group-hover:bg-accent/15 group-hover:text-accent-strong">
+        <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-fg/10 transition-colors group-hover:bg-accent/15 group-hover:text-accent-strong">
           <Icon name="qr" className="h-8 w-8" />
         </span>
-        <span className="text-base font-bold text-fg">QR Code Scan</span>
-        <span className="text-sm">Use your camera to scan a PearDrop QR code</span>
+        <span className="text-[13px] font-bold text-fg">QR Code Scan</span>
+        <span className="text-[12px]">Use your camera to scan a PearDrop QR code</span>
       </button>
 
       <Button

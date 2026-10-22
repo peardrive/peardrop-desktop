@@ -40,6 +40,7 @@ import {
   type BackendContext,
   type CreateShareInput,
   type CreateShareOutput,
+  type NetworkCounters,
   type TransferBackend
 } from '../backend'
 
@@ -616,6 +617,77 @@ export class HyperdriveBackend implements TransferBackend {
     this.activeDownloads.delete(driveId)
     this.downloadAborters.delete(driveId)
     this.downloadRoots.delete(driveId)
+  }
+
+  // ───────────────────────────── receive queue support ─────────────────────────────
+
+  async release(driveId: string): Promise<void> {
+    if (!driveId || this.manager.getDriveEntry(driveId)) return
+    try {
+      if (this.manager.activeDrives.has(driveId)) await this.manager.stopDrive(driveId, { delete: false, persistState: false })
+    } catch (err) {
+      this.log.warn('Release failed', { driveId, error: (err as Error).message })
+    }
+    // openDrive() made a Corestore folder for this id; nothing references it now.
+    await fs.rm(path.join(this.manager.drivesDir, driveId), { recursive: true, force: true }).catch(() => undefined)
+  }
+
+  async rediscover(driveId: string): Promise<SimpleResult> {
+    const entry = this.manager.getDriveEntry(driveId)
+    if (!entry || entry.isUpload !== false) return { success: false, error: 'Not a download' }
+    if (this.activeDownloads.has(driveId)) return { success: true }
+    const session = this.manager.activeDrives.get(driveId)
+    // A session that synced is fine as it is; only a data-less one is stuck.
+    if (session && (session.manifest || session.totalBytes)) return { success: true }
+    if (this.reconnecting.has(driveId) || this.manager.pendingConnections.has(driveId)) return { success: true }
+    this.reconnecting.add(driveId)
+    try {
+      if (session) await this.manager.stopDrive(driveId, { delete: false, persistState: false })
+      await this.manager.resumeDrive(driveId)
+      return { success: true }
+    } catch (err) {
+      this.log.warn('Rediscover failed', { driveId, error: (err as Error).message })
+      return { success: false, error: (err as Error).message }
+    } finally {
+      this.reconnecting.delete(driveId)
+    }
+  }
+
+  // ───────────────────────────── network counters ─────────────────────────────
+
+  /** Last byte counters seen per connection (UDX stream totals). */
+  private readonly socketBytes = new WeakMap<object, { rx: number; tx: number }>()
+  private bytesIn = 0
+  private bytesOut = 0
+  private sampledOnce = false
+
+  networkCounters(): NetworkCounters {
+    const peers = new Set<string>()
+    let connections = 0
+    for (const session of this.manager.activeDrives.values()) {
+      const conns = (session.swarm as { connections?: Iterable<any> } | undefined)?.connections
+      if (!conns) continue
+      for (const conn of conns) {
+        connections++
+        const pk = conn?.remotePublicKey
+        peers.add(pk ? (Buffer.isBuffer(pk) ? pk.toString('hex') : String(pk)) : `conn${connections}`)
+        // Hyperswarm connections are SecretStreams over a UDX stream, which
+        // keeps running byte totals (protocol overhead included).
+        const raw = conn?.rawStream
+        const rx = Number(raw?.bytesReceived)
+        const tx = Number(raw?.bytesTransmitted)
+        if (!Number.isFinite(rx) || !Number.isFinite(tx)) continue
+        const prev = this.socketBytes.get(conn)
+        // A connection seen for the first time on the very first sample may
+        // be older than the sampler: take it as a baseline instead of a spike.
+        const base = prev ?? (this.sampledOnce ? { rx: 0, tx: 0 } : { rx, tx })
+        this.bytesIn += Math.max(0, rx - base.rx)
+        this.bytesOut += Math.max(0, tx - base.tx)
+        this.socketBytes.set(conn, { rx, tx })
+      }
+    }
+    this.sampledOnce = true
+    return { peers: peers.size, connections, bytesIn: this.bytesIn, bytesOut: this.bytesOut }
   }
 
   // ───────────────────────────── library ─────────────────────────────

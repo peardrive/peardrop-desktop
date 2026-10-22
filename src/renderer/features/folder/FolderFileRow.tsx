@@ -17,14 +17,14 @@ export function FolderFileRow({ file, missing }: { file: DriveFile; missing: boo
   const open = () => !missing && void openLocalFile(file.path)
   return (
     <div onClick={open} className={cn('flex min-w-0 items-center gap-3 rounded-xl px-2 py-2 transition-colors', !missing && 'hover:bg-fg/[0.05]')}>
-      <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-[10px]">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-[10px]">
         {src ? <img src={src} alt="" onError={onError} className="h-full w-full object-cover" /> : <FileTypeIcon name={file.name} className="h-8 w-8" />}
       </div>
       <div className="min-w-0 flex-1">
-        <div className={cn('truncate text-sm font-semibold', missing && 'text-muted line-through')} title={file.name}>
+        <div className={cn('truncate text-[12px] font-semibold', missing && 'text-muted line-through')} title={file.name}>
           {file.name}
         </div>
-        <div className={cn('text-xs', missing ? 'font-semibold text-danger' : 'text-muted')}>{missing ? 'File removed' : formatBytes(file.size)}</div>
+        <div className={cn('text-[11px]', missing ? 'font-semibold text-danger' : 'text-muted')}>{missing ? 'File removed' : formatBytes(file.size)}</div>
       </div>
       <Button
         size="xs"

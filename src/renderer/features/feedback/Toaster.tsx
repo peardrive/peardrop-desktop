@@ -18,7 +18,7 @@ export function Toaster() {
           key={t.id}
           type="button"
           onClick={() => dismiss(t.id)}
-          className="glass pointer-events-auto flex max-w-[520px] items-center gap-2.5 rounded-full px-4 py-2.5 text-sm font-semibold text-fg shadow-menu animate-slide-up"
+          className="glass pointer-events-auto flex max-w-[520px] items-center gap-2.5 rounded-full px-4 py-2.5 text-[12px] font-semibold text-fg shadow-menu animate-slide-up"
         >
           {t.kind !== 'info' && (
             <span className={cn('flex h-5 w-5 shrink-0 items-center justify-center rounded-full', t.kind === 'success' ? 'bg-success/20 text-success' : 'bg-danger/20 text-danger')}>

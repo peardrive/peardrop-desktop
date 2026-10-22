@@ -59,6 +59,16 @@ export class ShareCancelledError extends Error {
   }
 }
 
+export interface NetworkCounters {
+  /** Distinct remote peers connected right now. */
+  peers: number
+  /** Open peer connections right now. */
+  connections: number
+  /** Bytes received / sent since the backend started. */
+  bytesIn: number
+  bytesOut: number
+}
+
 export interface BackendContext {
   paths: PeardropPaths
   network: { bootstrap: BootstrapNode[] }
@@ -92,6 +102,25 @@ export interface TransferBackend {
   open(link: string, opts?: { force?: boolean }): Promise<OpenResult>
   download(req: DownloadRequest): Promise<DownloadResult>
   cancelDownload(driveId: string): Promise<SimpleResult>
+
+  /**
+   * Close a live session that `open()` left behind without a persisted
+   * drive (sender never reached, or reached but not synced yet). Persisted
+   * drives are left alone. Used by the receive queue between retries.
+   */
+  release(driveId: string): Promise<void>
+  /**
+   * Restart sender discovery for a persisted download that has no data yet
+   * (its session joined the swarm but never synced). Emits
+   * `drive-ready-to-download` once the sender is back.
+   */
+  rediscover(driveId: string): Promise<SimpleResult>
+
+  /**
+   * Network counters for the status panel. Byte totals are cumulative and
+   * monotonic for the lifetime of this backend instance.
+   */
+  networkCounters(): NetworkCounters
 
   pause(driveId: string): Promise<SimpleResult & { record?: DriveRecord }>
   resume(driveId: string): Promise<SimpleResult & { record?: DriveRecord }>

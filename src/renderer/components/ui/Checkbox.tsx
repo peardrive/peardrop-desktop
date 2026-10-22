@@ -20,11 +20,11 @@ export function Checkbox({ checked, onChange, label, hint, className }: Checkbox
       <input type="checkbox" className="peer sr-only" checked={checked} onChange={(e) => onChange(e.target.checked)} />
       <span
         className={cn(
-          'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-accent/60',
+          'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-accent/60',
           checked ? 'border-accent bg-accent text-accent-on' : 'border-line bg-field'
         )}
       >
-        {checked && <Icon name="check" className="h-3.5 w-3.5" />}
+        {checked && <Icon name="check" className="h-3 w-3" />}
       </span>
       <span className="text-sm font-semibold text-fg">
         {label}

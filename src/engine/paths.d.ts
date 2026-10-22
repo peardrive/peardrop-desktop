@@ -7,9 +7,13 @@ export interface PeardropPaths {
   stateFile: string
   preferencesFile: string
   libraryFile: string
+  /** Pasted links waiting for their sender (desktop receive queue). */
+  receiveQueueFile: string
   windowStateFile: string
   logsDir: string
 }
+
+export function createSafeFolderName(str: string): string
 export function resolvePeardropPaths(opts?: { home?: string; profile?: string | null }): PeardropPaths
 export const DEFAULT_PATHS: PeardropPaths
 export const LEGACY_ROOT: string

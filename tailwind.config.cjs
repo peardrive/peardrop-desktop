@@ -36,14 +36,17 @@ module.exports = {
         danger: token('danger'),
         info: token('info'),
         folder: token('folder'),
-        star: token('star')
+        star: token('star'),
+        online: token('online'),
+        inbound: token('inbound')
       },
       fontFamily: {
-        sans: ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Display"', '"Segoe UI"', 'Roboto', 'sans-serif']
+        // Bundled (src/renderer/assets/fonts); system fonts cover other scripts.
+        sans: ['"Plus Jakarta Sans"', '-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', 'Tahoma', 'sans-serif']
       },
       borderRadius: {
-        card: '12px',
-        modal: '22px'
+        card: '10px',
+        modal: '16px'
       },
       boxShadow: {
         modal: 'var(--pd-shadow-modal)',

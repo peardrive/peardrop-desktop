@@ -6,6 +6,7 @@
  *
  * @example <DriveStatusLine drive={drive} fileCount={drive.files.length} />
  */
+import { useEffect, useState } from 'react'
 import { formatSpeed } from '../../lib/format'
 import { isGroup, statusPresentation, typePrefix, type DriveView } from '../../lib/drive-model'
 import { Icon } from '../ui/Icon'
@@ -17,17 +18,29 @@ export interface DriveStatusLineProps {
   fileCount?: number
 }
 
+/** "in 2m" / "in 12s" until a queued link's next discovery attempt (ticks while shown). */
+function NextTry({ at }: { at: number }) {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [])
+  const s = Math.max(0, Math.round((at - now) / 1000))
+  if (s <= 1) return <span className="whitespace-nowrap">· trying…</span>
+  return <span className="tabular whitespace-nowrap">· next try in {s < 60 ? `${s}s` : `${Math.ceil(s / 60)}m`}</span>
+}
+
 export function DriveStatusLine({ drive, fileCount }: DriveStatusLineProps) {
   const { label, tone, moving } = statusPresentation(drive)
   const prefix = typePrefix(drive)
   const count = fileCount ?? drive.files.length
   const speed = moving ? formatSpeed(drive.speed) : ''
   return (
-    <div className="flex min-w-0 items-center gap-1.5 text-[13px] text-muted">
+    <div className="flex min-w-0 items-center gap-1 text-[11px] text-muted" title={drive.receive?.lastError ?? undefined}>
       {isGroup(drive) && (
         <>
           <span className="inline-flex items-center gap-1 whitespace-nowrap">
-            <Icon name="file" className="h-3.5 w-3.5 opacity-70" />
+            <Icon name="file" className="h-3 w-3 opacity-70" />
             {count} File{count !== 1 ? 's' : ''}
           </span>
           <span aria-hidden>•</span>
@@ -42,6 +55,7 @@ export function DriveStatusLine({ drive, fileCount }: DriveStatusLineProps) {
       <StatusText tone={tone} className="truncate">
         {label}
       </StatusText>
+      {drive.receive?.phase === 'waiting' && drive.receive.nextAttemptAt != null && <NextTry at={drive.receive.nextAttemptAt} />}
       {speed && (
         <span className="tabular whitespace-nowrap">
           <span aria-hidden>– </span>

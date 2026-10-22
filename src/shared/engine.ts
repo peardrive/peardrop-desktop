@@ -27,3 +27,21 @@ export interface EngineReloadRequest {
 }
 
 export type EngineReloadResult = { success: true; status: EngineStatus } | { success: false; error: string; status: EngineStatus }
+
+/** Live network figures for the sidebar status panel (pushed about once a second). */
+export interface NetworkStats {
+  /** Distinct remote peers connected right now, across every share and download. */
+  peers: number
+  /** Open peer connections. */
+  connections: number
+  /** Bytes per second received (smoothed). */
+  inbound: number
+  /** Bytes per second sent (smoothed). */
+  outbound: number
+  /** Bytes received / sent since the engine (re)started. */
+  totalIn: number
+  totalOut: number
+  at: number
+}
+
+export const EMPTY_NETWORK_STATS: NetworkStats = { peers: 0, connections: 0, inbound: 0, outbound: 0, totalIn: 0, totalOut: 0, at: 0 }

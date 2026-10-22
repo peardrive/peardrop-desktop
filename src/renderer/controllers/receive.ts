@@ -1,34 +1,41 @@
 /**
- * Receiving: link → duplicate check → placeholder card → open → download.
+ * Receiving: link → receive queue (main) → placeholder card → sender reached
+ * → real card + download.
  *
- * Guards ported from the old renderer:
+ * The queue lives in the main process (services/receive-queue.ts) and is
+ * persisted, so a link whose sender is offline is remembered across restarts
+ * and retried in the background until it downloads. This controller only
+ * mirrors it: every queued link without a drive yet is a placeholder card,
+ * and a reached link turns into the engine's real card.
+ *
+ * Guards kept from the old renderer:
  *  - one download request in flight per drive from this window (main holds
  *    the authoritative guard; this one stops redundant IPC and flicker),
- *  - `userStarted` records drives the user asked to download this session;
- *    a drive the engine resumed at boot parks as "Disconnected" and waits
- *    for Resume instead of silently pulling gigabytes,
- *  - a placeholder cancelled while still connecting cancels the real drive
- *    if the connection lands afterwards.
+ *  - `userStarted` records drives the user resumed this session; a drive
+ *    the engine resumed at boot parks as "Disconnected" and waits for Resume
+ *    instead of silently pulling gigabytes — unless the receive queue owns
+ *    it (the user asked for it and it never finished).
  */
 import { extractShareLink } from '@shared/links'
+import type { ReceiveTask } from '@shared/receive'
 import type { DriveView } from '../lib/drive-model'
 import { api } from '../services/client'
 import { drivesStore } from '../stores/drives-store'
+import { receiveStore } from '../stores/receive-store'
 import { toast } from '../stores/toast-store'
 import { uiStore } from '../stores/ui-store'
+import { upsertRecord } from './library'
 
 const inFlight = new Set<string>()
 export const userStarted = new Set<string>()
-const cancelledPlaceholders = new Set<string>()
 
 /** Scroll to an existing card and pulse it. */
 export function highlightDrive(id: string) {
   const ui = uiStore()
   ui.setPage('main')
   // Make sure the card is actually visible before pointing at it.
-  ui.setTab('shares')
+  ui.setTab('all')
   ui.setSearch('')
-  ui.setKindFilter('all')
   ui.setStatusFilter('any')
   drivesStore().highlight(id)
   setTimeout(() => {
@@ -36,8 +43,11 @@ export function highlightDrive(id: string) {
   }, 2200)
 }
 
-/** Validate a pasted value, refuse duplicates, then start the download. */
-export async function startDownload(raw: string): Promise<void> {
+/**
+ * Validate a pasted value and hand it to the receive queue. Returns true
+ * when the link is (now) being received.
+ */
+export async function startDownload(raw: string): Promise<boolean> {
   const link = extractShareLink(raw)
   if (!link) {
     toast.error(
@@ -45,89 +55,93 @@ export async function startDownload(raw: string): Promise<void> {
         ? 'Invalid link — the key after peardrop:// must be exactly 64 hex characters.'
         : 'Not a peardrop:// link. Paste the full link starting with peardrop://'
     )
-    return
+    return false
   }
 
-  let dup
+  let res
   try {
-    dup = await api().transfers.checkLink(link)
+    res = await api().receive.add(link)
   } catch (err) {
     toast.error(`Could not start download: ${(err as Error).message || 'engine error'}`)
-    return
+    return false
   }
-  // Already in the list (including your OWN share): point at it instead.
-  if (dup.isDuplicate) {
-    highlightDrive(dup.driveId)
-    toast.info(dup.existing.isUpload ? 'This is your own share' : 'Already downloaded')
-    return
+  switch (res.status) {
+    case 'invalid':
+      toast.error(res.error)
+      return false
+    case 'duplicate':
+      // Already in the list (including your OWN share): point at it instead.
+      highlightDrive(res.driveId)
+      toast.info(res.isUpload ? 'This is your own share' : 'Already downloaded')
+      return false
+    case 'pending':
+      highlightDrive(res.task.driveId ?? res.task.id)
+      toast.info('Already receiving this link')
+      return true
+    case 'queued':
+      // Draw the card now; the push that follows confirms it.
+      syncReceiveTasks([res.task, ...receiveStore().tasks.filter((t) => t.id !== res.task.id)])
+      return true
+  }
+}
+
+/** "Link a1b2c3…9f0e" — enough of the key to tell two queued links apart. */
+export function shortLinkName(link: string): string {
+  const key = link.replace(/^peardrop:\/\//i, '')
+  return `Link ${key.slice(0, 6)}…${key.slice(-4)}`
+}
+
+const placeholderFor = (t: ReceiveTask): DriveView => ({
+  id: t.id,
+  name: t.name || shortLinkName(t.link),
+  kind: 'download',
+  status: 'connecting',
+  progress: null,
+  speed: 0,
+  peers: 0,
+  size: 0,
+  files: [],
+  shareLink: t.link,
+  addedAt: t.addedAt,
+  isPlaceholder: true,
+  receive: { phase: t.phase, attempts: t.attempts, nextAttemptAt: t.nextAttemptAt, lastError: t.lastError }
+})
+
+/**
+ * Mirror main's receive queue into the list: one placeholder per link still
+ * looking for its sender; a link that reached its sender becomes the
+ * engine's card (fetched if this window has not seen it yet).
+ */
+export function syncReceiveTasks(tasks: ReceiveTask[]): void {
+  receiveStore().setTasks(tasks)
+  const s = drivesStore()
+  const waiting = new Set(tasks.filter((t) => !t.driveId).map((t) => t.id))
+
+  // Placeholders whose task is gone or has been reached.
+  for (const id of s.order) {
+    const d = s.drives[id]
+    if (d?.isPlaceholder && d.receive && !waiting.has(id)) s.remove(id)
   }
 
-  const tempId = `dl_${Date.now()}`
-  drivesStore().upsert({
-    id: tempId,
-    name: 'Connecting…',
-    kind: 'download',
-    status: 'connecting',
-    progress: 0,
-    speed: 0,
-    peers: 0,
-    size: 0,
-    files: [],
-    shareLink: link,
-    addedAt: Date.now(),
-    isPlaceholder: true
-  })
-
-  let open
-  try {
-    open = await api().transfers.open(link, { force: true })
-  } catch (err) {
-    open = { success: false as const, error: (err as Error).message || 'engine error' }
+  for (const t of tasks) {
+    if (!t.driveId) {
+      s.upsert(placeholderFor(t), { prepend: true })
+      continue
+    }
+    const card = drivesStore().drives[t.driveId]
+    if (!card) {
+      const driveId = t.driveId
+      void api()
+        .transfers.get(driveId)
+        .then((record) => {
+          if (record && receiveStore().ownedDrives.has(driveId)) upsertRecord(record)
+        })
+        .catch(() => undefined)
+    } else if (card.status === 'interrupted' && !inFlight.has(t.driveId)) {
+      // The queue is on it: it is reconnecting, not parked.
+      s.patch(t.driveId, { status: 'connecting' })
+    }
   }
-
-  if (cancelledPlaceholders.has(tempId)) {
-    cancelledPlaceholders.delete(tempId)
-    // The user gave up while we were connecting; clean up what did connect.
-    if (open.success && !open.isDuplicate) void api().transfers.cancelDownload(open.driveId)
-    return
-  }
-
-  if (!open.success) {
-    drivesStore().patch(tempId, { status: 'error', name: 'Download failed' })
-    toast.error(`Download failed: ${open.error || 'unknown error'}`)
-    setTimeout(() => drivesStore().remove(tempId), 5000)
-    return
-  }
-  if (open.isDuplicate) {
-    drivesStore().remove(tempId)
-    highlightDrive(open.driveId)
-    return
-  }
-
-  const hasPeer = open.peerConnected
-  const hasData = !!open.shareName && open.files.length > 0
-  if (!hasPeer && !hasData) {
-    drivesStore().patch(tempId, { name: 'Waiting for peer…', status: 'connecting' })
-    return
-  }
-
-  drivesStore().remove(tempId)
-  drivesStore().upsert({
-    id: open.driveId,
-    name: open.shareName || 'Download',
-    kind: 'download',
-    status: 'downloading',
-    progress: 0,
-    speed: 0,
-    peers: hasPeer ? 1 : 0,
-    size: open.totalBytes || 0,
-    files: open.files,
-    shareLink: link,
-    addedAt: Date.now()
-  })
-  if (open.truncated) toast.info(`Showing ${open.truncated.shown} of ${open.truncated.available} files`)
-  userStarted.add(open.driveId)
-  void runDownload(open.driveId)
 }
 
 /** Run (or continue) the download loop for an opened drive. */
@@ -175,8 +189,13 @@ export async function redownload(drive: DriveView) {
   await startDownload(drive.shareLink)
 }
 
-/** ✕ on a placeholder that never connected. */
+/** ✕ on a placeholder: forget the queued link. */
 export function cancelPlaceholder(id: string) {
-  cancelledPlaceholders.add(id)
   drivesStore().remove(id)
+  void api().receive.remove(id)
+}
+
+/** ⟳ on a placeholder: look for the sender now instead of waiting. */
+export function searchNow(id: string) {
+  void api().receive.retry(id)
 }

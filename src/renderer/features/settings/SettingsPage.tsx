@@ -16,12 +16,13 @@ import { PageHeader, SettingsRow, SettingsSection } from './SettingsLayout'
 import { ThemePicker } from './ThemePicker'
 
 function PathValue({ path }: { path: string | undefined }) {
-  return <span className="select-text break-all font-mono text-xs">{path ?? '—'}</span>
+  return <span className="select-text break-all font-mono text-[10px]">{path ?? '—'}</span>
 }
 
 export default function SettingsPage() {
   const info = useSettingsStore((s) => s.appInfo)
   const debug = useSettingsStore((s) => s.preferences.diagnostics.debug)
+  const background = useSettingsStore((s) => s.preferences.background)
   const update = useSettingsStore((s) => s.updatePreferences)
   const setPage = useUiStore((s) => s.setPage)
   const [copying, setCopying] = useState(false)
@@ -39,15 +40,15 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl pb-16">
+    <div className="mx-auto max-w-2xl pb-10">
       <PageHeader title="Settings" onBack={() => setPage('main')} />
-      <div className="px-8">
-        <div className="mt-2 flex items-center gap-4 rounded-2xl bg-fg/[0.035] p-4">
-          {info?.iconDataUrl ? <img src={info.iconDataUrl} alt="" className="h-16 w-16 rounded-2xl" /> : <div className="h-16 w-16 rounded-2xl bg-accent/20" />}
+      <div className="px-4">
+        <div className="mt-1 flex items-center gap-3 rounded-xl bg-gradient-to-b from-panel to-panel/60 p-3">
+          {info?.iconDataUrl ? <img src={info.iconDataUrl} alt="" className="h-11 w-11 rounded-xl" /> : <div className="h-11 w-11 rounded-xl bg-accent/20" />}
           <div className="min-w-0 flex-1">
-            <div className="text-xl font-bold">{info?.identity.productName ?? 'PearDrop'}</div>
-            <div className="text-sm text-muted">{info?.identity.description}</div>
-            <div className="mt-1 flex flex-wrap gap-2 text-xs font-semibold text-subtle">
+            <div className="text-[15px] font-semibold">{info?.identity.productName ?? 'PearDrop'}</div>
+            <div className="text-[11px] text-muted">{info?.identity.description}</div>
+            <div className="mt-0.5 flex flex-wrap gap-2 text-[10px] font-semibold text-subtle">
               <span>v{info?.version}</span>
               {info?.profile && <span className="rounded-full bg-warning/15 px-2 text-warning">profile: {info.profile}</span>}
               {info?.isDev && <span className="rounded-full bg-info/15 px-2 text-info">development</span>}
@@ -56,10 +57,38 @@ export default function SettingsPage() {
         </div>
 
         <SettingsSection title="Appearance">
-          <SettingsRow icon="palette" label="Theme" description="Applies to every screen instantly." stacked control={<ThemePicker />} />
+          <SettingsRow icon="palette" label="Theme" description="Applies to every screen instantly. Hover a theme to read about it." stacked control={<ThemePicker />} />
         </SettingsSection>
 
         <NetworkSettings />
+
+        <SettingsSection title="Background" description="Shares and downloads only move while PearDrop is running.">
+          <SettingsRow
+            icon="monitor"
+            label="Keep running when the window is closed"
+            description="PearDrop stays in the tray (menu bar on macOS) with Send, Receive and Quit. Quit from there to stop sharing."
+            control={
+              <Switch
+                label="Keep running when the window is closed"
+                checked={background.closeToTray}
+                onChange={(v) => void update({ background: { closeToTray: v } })}
+              />
+            }
+          />
+          <SettingsRow
+            icon="bolt"
+            label="Start when you sign in"
+            description={info?.isDev ? 'Available in the installed app.' : 'Opens in the background so your shares are reachable right away.'}
+            control={
+              <Switch
+                label="Start when you sign in"
+                checked={background.openAtLogin}
+                disabled={info?.isDev}
+                onChange={(v) => void update({ background: { openAtLogin: v } })}
+              />
+            }
+          />
+        </SettingsSection>
 
         <SettingsSection title="Storage" description="Shared files stay where they are on your computer; only received files are stored here.">
           <SettingsRow

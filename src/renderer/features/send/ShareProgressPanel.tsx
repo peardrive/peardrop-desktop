@@ -39,15 +39,15 @@ export function ShareProgressPanel({ onClose }: { onClose: () => void }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center pt-2">
       {!multi && (
-        <ProgressRing percent={t.percent} size={132}>
-          <span className="tabular text-3xl font-bold">
+        <ProgressRing percent={t.percent} size={104}>
+          <span className="tabular text-[22px] font-bold">
             {t.percent}
-            <span className="text-lg text-muted">%</span>
+            <span className="text-[14px] text-muted">%</span>
           </span>
         </ProgressRing>
       )}
-      <h3 className="mt-4 text-xl font-bold">{headline}</h3>
-      <p className="mt-1 max-w-full truncate text-sm text-muted">{sub}</p>
+      <h3 className="mt-4 text-[15px] font-bold">{headline}</h3>
+      <p className="mt-1 max-w-full truncate text-[12px] text-muted">{sub}</p>
 
       {multi && (
         <div className="scroll-thin mt-4 w-full min-h-0 flex-1 space-y-1.5 overflow-y-auto">
@@ -57,11 +57,11 @@ export function ShareProgressPanel({ onClose }: { onClose: () => void }) {
         </div>
       )}
 
-      <div className="mt-5 flex w-full items-stretch justify-center divide-x-2 divide-fg/10 rounded-2xl bg-fg/[0.05] py-3">
+      <div className="mt-5 flex w-full items-stretch justify-center divide-x-2 divide-fg/10 rounded-xl bg-fg/[0.05] py-3">
         {stats.map(([label, value]) => (
           <div key={label} className="flex-1 px-4 text-center">
-            <div className="text-xs font-bold uppercase tracking-wider text-subtle">{label}</div>
-            <div className="tabular mt-1 text-sm font-bold">{value}</div>
+            <div className="text-[11px] font-bold uppercase tracking-wider text-subtle">{label}</div>
+            <div className="tabular mt-1 text-[12px] font-bold">{value}</div>
           </div>
         ))}
       </div>

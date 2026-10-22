@@ -29,9 +29,9 @@ export function RecentShares() {
   )
   return (
     <section className="mt-5 border-t-2 border-fg/10 pt-4">
-      <h3 className="mb-2 text-sm font-bold">Recent Shares</h3>
+      <h3 className="mb-2 text-[12px] font-bold">Recent Shares</h3>
       {recent.length === 0 ? (
-        <p className="py-6 text-center text-sm text-muted">No shares yet</p>
+        <p className="py-4 text-center text-[12px] text-muted">No shares yet</p>
       ) : (
         <div className="grid grid-cols-2 gap-x-6 gap-y-1">
           {recent.map((d) => {
@@ -39,10 +39,10 @@ export function RecentShares() {
             const { label, tone } = statusPresentation(d)
             return (
               <div key={d.id} className="flex min-w-0 items-center gap-3 rounded-xl px-2 py-2">
-                <DriveThumb drive={d} title={title} size={40} className="rounded-[10px]" />
+                <DriveThumb drive={d} title={title} size={32} className="rounded-[10px]" />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-semibold">{title}</div>
-                  <div className="truncate text-xs text-muted">
+                  <div className="truncate text-[12px] font-semibold">{title}</div>
+                  <div className="truncate text-[11px] text-muted">
                     {isGroup(d) ? 'Folder' : CATEGORY_LABEL[categoryOf(sourceName(d))]} · <StatusText tone={tone}>{label}</StatusText>
                   </div>
                 </div>

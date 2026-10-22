@@ -24,7 +24,7 @@ export interface ProgressBarProps {
 export function ProgressBar({ value, tone = 'accent', className }: ProgressBarProps) {
   const pct = Math.max(0, Math.min(100, value * 100))
   return (
-    <div className={cn('h-1.5 w-full overflow-hidden rounded-full bg-fg/10', className)} role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
+    <div className={cn('h-1 w-full overflow-hidden rounded-full bg-fg/10', className)} role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
       <div className={cn('h-full rounded-full transition-[width] duration-300 ease-out', TONE_FILL[tone])} style={{ width: `${pct}%` }} />
     </div>
   )

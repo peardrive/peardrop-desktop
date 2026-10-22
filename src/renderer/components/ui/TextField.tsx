@@ -28,13 +28,13 @@ export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(function T
   ref
 ) {
   return (
-    <div className={cn('flex h-11 items-center gap-2 rounded-full border-2 bg-field px-4 transition-colors', STATE_BORDER[state], containerClassName)}>
-      {leadingIcon && <Icon name={leadingIcon} className="h-4 w-4 shrink-0 text-subtle" />}
+    <div className={cn('flex h-9 items-center gap-2 rounded-lg border bg-field px-3 transition-colors', STATE_BORDER[state], containerClassName)}>
+      {leadingIcon && <Icon name={leadingIcon} className="h-3.5 w-3.5 shrink-0 text-subtle" />}
       <input
         ref={ref}
         spellCheck={false}
         autoComplete="off"
-        className={cn('h-full min-w-0 flex-1 bg-transparent text-sm text-fg placeholder:text-subtle focus:outline-none', className)}
+        className={cn('h-full min-w-0 flex-1 bg-transparent text-[12px] text-fg placeholder:text-subtle focus:outline-none', className)}
         {...rest}
       />
       {trailing}

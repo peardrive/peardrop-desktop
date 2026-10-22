@@ -21,7 +21,7 @@ export function StagedFileList() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center justify-between pb-2 pt-4">
-        <span className="text-sm font-bold">
+        <span className="text-[12px] font-bold">
           Ready to share · <span className="text-muted">{plural(count, 'file')} · {formatBytes(total)}</span>
         </span>
         <Button size="xs" variant="ghost" onClick={clear}>
@@ -33,10 +33,10 @@ export function StagedFileList() {
           <li key={f.path} className="flex items-center gap-3 rounded-xl bg-fg/[0.04] px-3 py-2">
             {f.type === 'folder' ? <FolderGlyph className="h-8 w-8" /> : <FileTypeIcon name={f.name} className="h-8 w-8" />}
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-semibold" title={f.path}>
+              <div className="truncate text-[12px] font-semibold" title={f.path}>
                 {f.name}
               </div>
-              <div className="text-xs text-muted">
+              <div className="text-[11px] text-muted">
                 {f.type === 'folder' ? `${plural(f.fileCount ?? 0, 'file')} · ` : ''}
                 {formatBytes(f.size)}
               </div>

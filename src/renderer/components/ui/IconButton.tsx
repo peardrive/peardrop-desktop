@@ -27,9 +27,9 @@ const TONES = {
   danger: 'text-danger hover:bg-danger/15',
   solid: 'bg-tabs text-fg hover:brightness-125'
 }
-const RINGS = { neutral: 'border-2 border-line', accent: 'border-2 border-accent/70', danger: 'border-2 border-danger/70', solid: '' }
-const SIZES = { sm: 'h-7 w-7', md: 'h-9 w-9', lg: 'h-11 w-11' }
-const ICONS = { sm: 'h-3.5 w-3.5', md: 'h-[18px] w-[18px]', lg: 'h-6 w-6' }
+const RINGS = { neutral: 'border border-fg/15', accent: 'border border-accent/70', danger: 'border border-danger/70', solid: '' }
+const SIZES = { sm: 'h-6 w-6', md: 'h-8 w-8', lg: 'h-9 w-9' }
+const ICONS = { sm: 'h-3 w-3', md: 'h-4 w-4', lg: 'h-5 w-5' }
 
 export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
   { icon, label, tone = 'neutral', size = 'md', ringed, className, iconClassName, type = 'button', ...rest },

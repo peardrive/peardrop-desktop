@@ -9,7 +9,7 @@ import { useMetaStore } from '../stores/meta-store'
 import { toast } from '../stores/toast-store'
 import { uiStore } from '../stores/ui-store'
 import { armInitiatingWatchdog, clearInitiatingWatchdog, reconcileMissingFiles } from './library'
-import { cancelPlaceholder, redownload, resumeInterrupted } from './receive'
+import { cancelPlaceholder, redownload, resumeInterrupted, searchNow } from './receive'
 import { reshare } from './share'
 
 const UNDO_SECONDS = 5
@@ -88,7 +88,7 @@ async function cancelTransfer(d: DriveView) {
   drivesStore().setCancelling(d.id, true)
   if (d.isPlaceholder) {
     cancelPlaceholder(d.id)
-    toast.info('Download cancelled')
+    toast.info('Link removed')
     return
   }
   if (isDownload) {
@@ -153,6 +153,8 @@ export function runRowAction(action: RowAction, d: DriveView): void {
       return void reshare(d)
     case 'clear':
       return confirmRemove(d)
+    case 'search':
+      return searchNow(d.id)
   }
 }
 

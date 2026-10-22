@@ -22,15 +22,15 @@ export function ShareJobRow({ job }: { job: ShareJob }) {
   return (
     <div className="relative flex items-center gap-3 rounded-xl bg-fg/[0.05] px-4 py-2.5">
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-bold">{job.name}</div>
-        {done ? <div className="text-xs font-semibold text-success">Ready to share</div> : <ProgressBar value={pct / 100} className="mt-1.5" />}
+        <div className="truncate text-[12px] font-bold">{job.name}</div>
+        {done ? <div className="text-[11px] font-semibold text-success">Ready to share</div> : <ProgressBar value={pct / 100} className="mt-1.5" />}
       </div>
       {done ? (
         <>
           <div className="relative" onMouseEnter={() => setShowQr(true)} onMouseLeave={() => setShowQr(false)}>
             <IconButton icon="qr" label="Show QR code" tone="accent" size="sm" />
             {showQr && qr && (
-              <img src={qr} alt="QR code" className="absolute bottom-10 right-0 z-10 h-36 w-36 rounded-xl bg-white p-1.5 shadow-menu" />
+              <img src={qr} alt="QR code" className="absolute bottom-10 right-0 z-10 h-28 w-28 rounded-xl bg-white p-1.5 shadow-menu" />
             )}
           </div>
           <Button size="xs" variant="primary" onClick={() => void copy(job.shareLink)}>
@@ -39,7 +39,7 @@ export function ShareJobRow({ job }: { job: ShareJob }) {
         </>
       ) : (
         <>
-          <span className="tabular w-10 text-right text-sm font-bold text-muted">{pct}%</span>
+          <span className="tabular w-10 text-right text-[12px] font-bold text-muted">{pct}%</span>
           <IconButton icon="close" label="Cancel this share" tone="danger" size="sm" disabled={!job.driveId} onClick={() => void cancelJob(job.id)} />
         </>
       )}

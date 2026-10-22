@@ -19,7 +19,7 @@ import type { TransferEvent } from '@shared/transfer'
 import type { PeardropPaths } from '../../engine/paths'
 import type { Logger } from '../logger'
 import type { PreferencesStore } from '../stores/preferences-store'
-import type { TransferBackend } from './backend'
+import type { NetworkCounters, TransferBackend } from './backend'
 import { BACKENDS, DEFAULT_BACKEND } from './registry'
 
 export interface EngineHostOptions {
@@ -38,6 +38,8 @@ export class EngineHost extends EventEmitter {
   private readonly backendId: string
   private readonly log: Logger
   private status: EngineStatus
+  /** Bumped for every backend instance, so counter consumers can detect a reset. */
+  private generation = 0
 
   constructor(private readonly opts: EngineHostOptions) {
     super()
@@ -70,6 +72,25 @@ export class EngineHost extends EventEmitter {
     return fn(this.backend)
   }
 
+  /** Network counters of the live backend (zeros while stopped or reloading). */
+  networkCounters(): NetworkCounters & { generation: number } {
+    const zero = { peers: 0, connections: 0, bytesIn: 0, bytesOut: 0 }
+    if (!this.backend || this.status.phase !== 'ready') return { ...zero, generation: this.generation }
+    try {
+      return { ...this.backend.networkCounters(), generation: this.generation }
+    } catch {
+      return { ...zero, generation: this.generation }
+    }
+  }
+
+  /**
+   * Emit a transfer event on behalf of a service that sits above the backend
+   * (the receive queue), so the renderer hears it on the usual channel.
+   */
+  publish(event: TransferEvent): void {
+    this.emit('event', event)
+  }
+
   /** Bootstrap nodes for the next start, and where they came from. */
   private resolveNetwork(): { nodes: BootstrapNode[]; source: EngineStatus['bootstrapSource'] } {
     if (this.opts.envBootstrap) {
@@ -99,6 +120,7 @@ export class EngineHost extends EventEmitter {
     const entry = BACKENDS[this.backendId]
     const backend = entry.create({ paths: this.opts.paths, network: { bootstrap: nodes }, log: this.log })
     this.backend = backend
+    this.generation++
     this.unsubscribe = backend.onEvent((event: TransferEvent) => this.emit('event', event))
 
     const starting = (async () => {

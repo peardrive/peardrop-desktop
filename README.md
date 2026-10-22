@@ -53,6 +53,15 @@ PearDrop:
 2. Click **"DOWNLOAD"**
 3. **Files appear** in your downloads folder
 
+If the sender is offline, the link waits in your list ("Waiting for sender") and PearDrop keeps
+looking for them in the background — even after you quit and reopen the app — until the
+download is done.
+
+### Running in the background
+Closing the window keeps PearDrop running in the tray (menu bar on macOS), so your shares stay
+reachable and downloads keep going. The tray menu has **Send…**, **Receive…** and **Quit**.
+Both this and "Start when you sign in" can be switched in Settings → Background.
+
 That's literally it. No registrations, no uploads to "the cloud," no waiting for some server to process your stuff.
 
 ---
@@ -79,6 +88,7 @@ npm run app          # build + run against the public DHT
 | `npm run bootstrap` | Start a fresh local HyperDHT bootstrapper on `127.0.0.1:8787` (`-- --lan`, `-- --host <ip> --port <n>`) |
 | `npm run dev` | Hot-reloading app wired to the local bootstrapper, isolated `dev` profile |
 | `npm run dev:peer` | A second dev instance (`dev-peer` profile) — send files between the two |
+| `npm run dev:mac` | Same as `dev`, with the macOS window chrome (frameless, in-app traffic lights) on any OS |
 | `npm run app` | Production build, public DHT (or the bootstrap set in Settings → Network) |
 | `npm run build` | Compile main, preload and renderer into `out/` |
 | `npm run build:win` / `build:mac` / `build:linux` / `build:all` | Installers into `dist/` (electron-builder) |
@@ -142,6 +152,9 @@ This is how the internet was supposed to work.
 - **Progress tracking** - See real transfer speeds and progress
 - **CLI tool** - Command line interface for automation
 - **QR codes** - Scan links with your phone camera
+- **Remembered links** - Pasted links wait for an offline sender, across restarts
+- **Background mode** - Lives in the tray with Send, Receive and Quit
+- **Live network panel** - Connected peers, inbound and outbound speed in the sidebar
 
 ### 🔮 Coming Soon
 - **Mobile apps** - iOS and Android clients
@@ -158,8 +171,9 @@ This is how the internet was supposed to work.
 ├── downloads/           # Files you receive (files you share stay where they are)
 ├── drives/              # P2P drive data (auto-managed)
 ├── drives-state.json    # Drive manifest
-├── preferences.json     # Settings: theme, network bootstrap, list view, debug
+├── preferences.json     # Settings: theme, network bootstrap, list view, layout, background, debug
 ├── library.json         # Favorites and display-name aliases
+├── receive-queue.json   # Pasted links still waiting for their sender
 ├── window-state.json    # Last window size/position
 └── logs/                # peardrop-YYYY-MM-DD.log, last 14 days kept
 ```

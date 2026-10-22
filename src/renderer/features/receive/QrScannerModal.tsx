@@ -78,10 +78,10 @@ export function QrScannerModal({ onResult, onClose, isTop }: { onResult: (text: 
 
   return (
     <Modal title="Scan a QR code" size="narrow" onClose={onClose} isTop={isTop}>
-      <div className="relative mt-2 aspect-square w-full overflow-hidden rounded-2xl bg-black">
+      <div className="relative mt-2 aspect-square w-full overflow-hidden rounded-xl bg-black">
         <video ref={videoRef} muted playsInline className="h-full w-full object-cover" />
-        <div className="pointer-events-none absolute inset-[18%] rounded-2xl border-4 border-accent/80 shadow-[0_0_0_999px_rgba(0,0,0,0.35)]" />
-        {status && <div className="absolute inset-0 flex items-center justify-center text-sm font-semibold text-white/80">{status}</div>}
+        <div className="pointer-events-none absolute inset-[18%] rounded-xl border-4 border-accent/80 shadow-[0_0_0_999px_rgba(0,0,0,0.35)]" />
+        {status && <div className="absolute inset-0 flex items-center justify-center text-[12px] font-semibold text-white/80">{status}</div>}
       </div>
       {cameras.length > 1 && (
         <>

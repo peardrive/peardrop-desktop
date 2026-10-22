@@ -8,9 +8,10 @@
  * line here — TypeScript then flags every side that has not caught up.
  */
 import type { AppInfo } from './app-info'
-import type { EngineReloadRequest, EngineReloadResult, EngineStatus } from './engine'
+import type { EngineReloadRequest, EngineReloadResult, EngineStatus, NetworkStats } from './engine'
 import type { LibraryData } from './library'
 import type { Preferences, PreferencesPatch } from './preferences'
+import type { ReceiveAddResult, ReceiveTask } from './receive'
 import type {
   DownloadRequest,
   DownloadResult,
@@ -37,6 +38,29 @@ export interface LogTailResult extends SimpleResult {
   path?: string
 }
 
+/** The frameless window's state, for the in-app window controls. */
+export interface WindowState {
+  maximized: boolean
+  fullScreen: boolean
+  focused: boolean
+}
+
+export type WindowAction = 'close' | 'minimize' | 'toggle-full-screen' | 'toggle-maximize'
+
+/** Theme colours for the window chrome (title bar, window background). */
+export interface WindowChrome {
+  /** Title bar / window fill (the theme canvas), hex. */
+  background: string
+  /** Caption button glyphs, hex. */
+  foreground: string
+}
+
+/** Height of the Windows title bar strip the native caption buttons sit on. */
+export const WINDOWS_TITLEBAR_HEIGHT = 32
+
+/** Things the tray / OS can ask the window to do. */
+export type AppCommand = 'send' | 'receive' | 'settings'
+
 export interface IpcInvokeMap {
   // transfers (backend-neutral)
   'transfers:snapshot': { args: []; result: LibrarySnapshot }
@@ -58,6 +82,11 @@ export interface IpcInvokeMap {
   'files:open-downloads': { args: []; result: SimpleResult }
   'files:thumbnail': { args: [path: string]; result: ThumbnailResult }
   'files:pick': { args: []; result: string[] }
+  // receive queue (links waiting for their sender)
+  'receive:list': { args: []; result: ReceiveTask[] }
+  'receive:add': { args: [link: string]; result: ReceiveAddResult }
+  'receive:remove': { args: [taskId: string]; result: SimpleResult }
+  'receive:retry': { args: [taskId?: string]; result: SimpleResult }
   // misc
   'qr:generate': { args: [text: string]; result: string }
   'app:info': { args: []; result: AppInfo }
@@ -70,6 +99,10 @@ export interface IpcInvokeMap {
   'library:import': { args: [LibraryData]; result: LibraryData }
   'engine:status': { args: []; result: EngineStatus }
   'engine:reload': { args: [EngineReloadRequest?]; result: EngineReloadResult }
+  'network:stats': { args: []; result: NetworkStats }
+  'window:state': { args: []; result: WindowState }
+  'window:action': { args: [WindowAction]; result: WindowState }
+  'window:set-chrome': { args: [WindowChrome]; result: void }
   'logs:path': { args: []; result: string }
   'logs:reveal': { args: []; result: SimpleResult }
   'logs:tail': { args: [lines?: number]; result: LogTailResult }
@@ -85,6 +118,10 @@ export interface IpcPushMap {
   'transfers:event': TransferEvent
   'settings:changed': Preferences
   'engine:status': EngineStatus
+  'network:stats': NetworkStats
+  'receive:changed': ReceiveTask[]
+  'app:command': AppCommand
+  'window:state': WindowState
 }
 export type IpcPushChannel = keyof IpcPushMap
 
@@ -129,8 +166,34 @@ export interface PeardropApi {
     /** Absolute path of a dropped/picked DOM File (Electron-only). */
     pathForFile(file: File): string
   }
+  receive: {
+    list(): Promise<ReceiveTask[]>
+    /** Queue a link: it is remembered (across restarts) until its download completes. */
+    add(link: string): Promise<ReceiveAddResult>
+    remove(taskId: string): Promise<SimpleResult>
+    /** Look for the sender now instead of waiting for the next attempt. */
+    retry(taskId?: string): Promise<SimpleResult>
+    onChange(cb: (tasks: ReceiveTask[]) => void): Unsubscribe
+  }
+  network: {
+    stats(): Promise<NetworkStats>
+    onStats(cb: (stats: NetworkStats) => void): Unsubscribe
+  }
+  /** The in-app window controls (the window has no OS title bar). */
+  window: {
+    state(): Promise<WindowState>
+    /** Close (hides to the tray when background mode is on), minimize, full screen, maximize. */
+    act(action: WindowAction): Promise<WindowState>
+    onState(cb: (state: WindowState) => void): Unsubscribe
+    /** Paint the window chrome (Windows title bar, window background) in the active theme. */
+    setChrome(chrome: WindowChrome): Promise<void>
+  }
   qr: { generate(text: string): Promise<string> }
-  app: { info(): Promise<AppInfo> }
+  app: {
+    info(): Promise<AppInfo>
+    /** Commands from the tray menu (Send…, Receive…). */
+    onCommand(cb: (command: AppCommand) => void): Unsubscribe
+  }
   settings: {
     get(): Promise<Preferences>
     update(patch: PreferencesPatch): Promise<Preferences>

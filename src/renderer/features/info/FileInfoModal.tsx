@@ -55,12 +55,12 @@ export function FileInfoModal({ driveId, onClose, isTop }: { driveId: string; on
       }
     >
       <div className="flex items-center gap-4 pb-5 pt-2">
-        <DriveThumb drive={drive} title={drive.title} size={72} className="rounded-[16px] bg-fg/[0.05]" />
+        <DriveThumb drive={drive} title={drive.title} size={52} className="rounded-[16px] bg-fg/[0.05]" />
         <div className="min-w-0">
-          <div className="truncate text-lg font-bold" title={drive.title}>
+          <div className="truncate text-[14px] font-bold" title={drive.title}>
             {drive.title}
           </div>
-          <div className="text-sm text-muted">
+          <div className="text-[12px] text-muted">
             {kind} · {formatBytes(drive.size)} · {plural(drive.files.length || 1, 'file')}
           </div>
         </div>

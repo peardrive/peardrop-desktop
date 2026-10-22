@@ -34,8 +34,8 @@ export function RenameModal({ driveId, onClose, isTop }: { driveId: string; onCl
 
   return (
     <Modal title="Rename" size="compact" onClose={onClose} isTop={isTop}>
-      <p className="text-sm leading-relaxed text-muted">Only changes how this appears in PearDrop. Files on disk — and what peers see — stay the same.</p>
-      <label className="mb-2 mt-5 block text-xs font-bold uppercase tracking-wider text-subtle" htmlFor="rename-input">
+      <p className="text-[12px] leading-relaxed text-muted">Only changes how this appears in PearDrop. Files on disk — and what peers see — stay the same.</p>
+      <label className="mb-2 mt-5 block text-[11px] font-bold uppercase tracking-wider text-subtle" htmlFor="rename-input">
         Display name
       </label>
       <TextField
@@ -48,7 +48,7 @@ export function RenameModal({ driveId, onClose, isTop }: { driveId: string; onCl
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => e.key === 'Enter' && void commit(value)}
       />
-      <div className="mt-2 flex min-h-[24px] items-center justify-between gap-3 px-1 text-xs text-muted">
+      <div className="mt-2 flex min-h-[24px] items-center justify-between gap-3 px-1 text-[11px] text-muted">
         <span className="truncate">{original !== FOLDER_PLACEHOLDER && <>Original name: <span className="font-semibold text-fg/80">{original}</span></>}</span>
         {alias && (
           <button type="button" className="shrink-0 font-bold text-accent-strong hover:underline" onClick={() => void commit('')}>

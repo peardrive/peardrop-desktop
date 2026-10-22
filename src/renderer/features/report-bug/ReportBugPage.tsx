@@ -60,16 +60,16 @@ export default function ReportBugPage() {
   return (
     <div className="mx-auto max-w-3xl pb-16">
       <PageHeader title="Report a bug" onBack={() => setPage('settings')} />
-      <div className="px-8">
+      <div className="px-4">
         <div className="relative mt-2">
           <textarea
             value={text}
             maxLength={MAX}
             onChange={(e) => setText(e.target.value)}
             placeholder="Describe what happened…"
-            className="h-40 w-full resize-none rounded-2xl border-2 border-line bg-field px-4 py-3 text-sm text-fg placeholder:text-subtle focus:border-accent/70 focus:outline-none"
+            className="h-40 w-full resize-none rounded-xl border-2 border-line bg-field px-4 py-3 text-[12px] text-fg placeholder:text-subtle focus:border-accent/70 focus:outline-none"
           />
-          <span className="tabular absolute bottom-3 right-4 text-xs text-subtle">
+          <span className="tabular absolute bottom-3 right-4 text-[11px] text-subtle">
             {text.length}/{MAX}
           </span>
         </div>
@@ -82,8 +82,8 @@ export default function ReportBugPage() {
             description={
               info && (
                 <span className="flex flex-wrap gap-2 pt-1">
-                  <span className="rounded-full bg-fg/10 px-2 py-0.5 text-xs font-semibold">v{info.version}</span>
-                  <span className="rounded-full bg-fg/10 px-2 py-0.5 text-xs font-semibold">
+                  <span className="rounded-full bg-fg/10 px-2 py-0.5 text-[11px] font-semibold">v{info.version}</span>
+                  <span className="rounded-full bg-fg/10 px-2 py-0.5 text-[11px] font-semibold">
                     {info.platform === 'win32' ? 'Windows' : info.platform === 'darwin' ? 'macOS' : 'Linux'}
                   </span>
                 </span>
@@ -94,7 +94,7 @@ export default function ReportBugPage() {
           <SettingsRow
             icon="log"
             label="Diagnostics log"
-            description={<span className="select-text break-all font-mono text-xs">{logPath}</span>}
+            description={<span className="select-text break-all font-mono text-[11px]">{logPath}</span>}
             control={
               <Button size="sm" variant="secondary" onClick={() => void api().logs.reveal()}>
                 Show log file
@@ -106,7 +106,7 @@ export default function ReportBugPage() {
         <Button variant="primary" size="lg" block className="mt-8" leading={<Icon name="copy" />} loading={busy} onClick={() => void copyReport()}>
           Copy report to clipboard
         </Button>
-        <p className="mt-3 text-center text-xs text-subtle">Nothing is sent automatically. Logs never contain share keys or your home folder path.</p>
+        <p className="mt-3 text-center text-[11px] text-subtle">Nothing is sent automatically. Logs never contain share keys or your home folder path.</p>
       </div>
     </div>
   )

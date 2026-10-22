@@ -1,7 +1,7 @@
 /**
  * ThemeProvider — applies the active theme to the whole app.
  *
- * Reads the theme preference from the settings store ('dark' | 'light' |
+ * Reads the theme preference from the settings store (a theme id or
  * 'system'), resolves 'system' against the OS appearance, and writes the
  * theme's tokens as CSS variables on <html>. Every component styles itself
  * with token-based Tailwind classes, so switching theme is one variable swap
@@ -11,20 +11,21 @@
  * read the resolved theme anywhere with `useTheme()`.
  */
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import type { ThemeId } from '@shared/preferences'
+import { SYSTEM_THEMES, type ThemeId } from '@shared/preferences'
 import { useSettingsStore } from '../stores/settings-store'
+import { api } from '../services/client'
 import { applyTheme, THEMES, type Theme } from './themes'
 
-const ThemeContext = createContext<Theme>(THEMES.dark)
+const ThemeContext = createContext<Theme>(THEMES.void)
 const CACHE_KEY = 'peardrop.theme'
 
 function systemTheme(): ThemeId {
-  return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+  return window.matchMedia?.('(prefers-color-scheme: light)').matches ? SYSTEM_THEMES.light : SYSTEM_THEMES.dark
 }
 
 /** Apply the last-used theme before React mounts, to avoid a flash. */
 export function applyCachedTheme(): void {
-  let id: ThemeId = 'dark'
+  let id: ThemeId = 'void'
   try {
     const cached = localStorage.getItem(CACHE_KEY) as ThemeId | null
     if (cached && cached in THEMES) id = cached
@@ -41,15 +42,21 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const mq = window.matchMedia?.('(prefers-color-scheme: light)')
     if (!mq) return
-    const onChange = () => setSystem(mq.matches ? 'light' : 'dark')
+    const onChange = () => setSystem(mq.matches ? SYSTEM_THEMES.light : SYSTEM_THEMES.dark)
     mq.addEventListener('change', onChange)
     return () => mq.removeEventListener('change', onChange)
   }, [])
 
-  const theme = useMemo(() => THEMES[preference === 'system' ? system : preference] ?? THEMES.dark, [preference, system])
+  const theme = useMemo(() => THEMES[preference === 'system' ? system : preference] ?? THEMES.void, [preference, system])
 
   useEffect(() => {
     applyTheme(theme)
+    // Title bar (Windows) and window background follow the theme too.
+    try {
+      void api().window.setChrome({ background: theme.colors.canvas, foreground: theme.colors.fg }).catch(() => undefined)
+    } catch {
+      /* client not installed yet */
+    }
     try {
       localStorage.setItem(CACHE_KEY, theme.id)
     } catch {

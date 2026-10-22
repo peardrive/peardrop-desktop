@@ -164,6 +164,8 @@ export type TransferEvent =
       failedCount: number
     }
   | { type: 'download-peer-disconnected'; driveId: string }
+  /** A download started by the receive queue failed; `willRetry` = the queue keeps trying. */
+  | { type: 'download-failed'; driveId: string; error: string; willRetry: boolean }
   | { type: 'drive-ready-to-download'; driveId: string; shareLink: string; shareName: string | null; totalBytes: number }
   | { type: 'drive-resume-failed'; driveId: string; error: string }
   | { type: 'drive-announced'; driveId: string; at?: number }

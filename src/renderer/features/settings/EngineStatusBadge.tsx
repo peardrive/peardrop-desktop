@@ -17,7 +17,7 @@ const MAP: Record<EnginePhase, { label: string; cls: string }> = {
 export function EngineStatusBadge({ phase }: { phase: EnginePhase }) {
   const m = MAP[phase]
   return (
-    <span className="inline-flex items-center gap-2 rounded-full bg-fg/[0.07] px-3 py-1 text-xs font-bold">
+    <span className="inline-flex items-center gap-2 rounded-full bg-fg/[0.07] px-3 py-1 text-[11px] font-bold">
       <span className={cn('h-2 w-2 rounded-full', m.cls)} />
       {m.label}
     </span>

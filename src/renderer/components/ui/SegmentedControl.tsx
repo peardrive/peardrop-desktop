@@ -26,7 +26,7 @@ export interface SegmentedControlProps<T extends string> {
 export function SegmentedControl<T extends string>({ value, onChange, options, variant = 'pill', className, ariaLabel }: SegmentedControlProps<T>) {
   const tabs = variant === 'tabs'
   return (
-    <div role="tablist" aria-label={ariaLabel} className={cn('inline-flex bg-tabs', tabs ? 'rounded-t-[18px] p-0' : 'rounded-full p-1', className)}>
+    <div role="tablist" aria-label={ariaLabel} className={cn('inline-flex bg-tabs', tabs ? 'rounded-t-[14px] p-0' : 'rounded-lg p-0.5', className)}>
       {options.map((o) => {
         const active = o.value === value
         return (
@@ -37,8 +37,8 @@ export function SegmentedControl<T extends string>({ value, onChange, options, v
             aria-selected={active}
             onClick={() => onChange(o.value)}
             className={cn(
-              'font-bold transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60',
-              tabs ? 'rounded-t-[18px] px-8 pb-3 pt-3.5 text-[20px]' : 'rounded-full px-4 py-1.5 text-[13px]',
+              'font-semibold transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60',
+              tabs ? 'rounded-t-[14px] px-5 pb-2 pt-2.5 text-[15px]' : 'rounded-md px-3 py-1 text-[12px]',
               active ? cn('bg-panel text-fg', !tabs && 'shadow-sm') : 'text-muted hover:text-fg'
             )}
           >

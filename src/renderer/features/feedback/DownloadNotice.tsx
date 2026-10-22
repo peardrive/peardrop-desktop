@@ -15,13 +15,13 @@ export function DownloadNotice() {
   const hide = useToastStore((s) => s.hideDownloadNotice)
   if (!notice) return null
   return (
-    <div key={notice.id} className="glass fixed bottom-6 right-6 z-[1100] flex w-[360px] items-center gap-3 rounded-2xl p-3.5 shadow-menu animate-slide-up" role="status">
+    <div key={notice.id} className="glass fixed bottom-6 right-6 z-[1100] flex w-[300px] items-center gap-3 rounded-xl p-3.5 shadow-menu animate-slide-up" role="status">
       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-success/15 text-success">
         <Icon name="arrow-down" className="h-5 w-5" />
       </span>
       <div className="min-w-0 flex-1">
-        <div className="text-sm font-bold">{notice.title}</div>
-        <div className="truncate text-xs text-muted">{notice.subtitle}</div>
+        <div className="text-[12px] font-bold">{notice.title}</div>
+        <div className="truncate text-[11px] text-muted">{notice.subtitle}</div>
       </div>
       <Button
         size="xs"

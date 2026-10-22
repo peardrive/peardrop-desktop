@@ -18,13 +18,13 @@ export interface DriveThumbProps {
   className?: string
 }
 
-export function DriveThumb({ drive, title, size = 56, className }: DriveThumbProps) {
+export function DriveThumb({ drive, title, size = 40, className }: DriveThumbProps) {
   const group = isGroup(drive)
   const file = !group ? drive.files[0] : undefined
   const { src, onError } = useThumbnail(file?.path, file?.name ?? title)
   return (
     <div
-      className={cn('flex shrink-0 items-center justify-center overflow-hidden rounded-[12px]', src ? 'bg-black/30' : '', className)}
+      className={cn('flex shrink-0 items-center justify-center overflow-hidden rounded-[9px]', src ? 'bg-black/30' : '', className)}
       style={{ width: size, height: size }}
     >
       {group ? (

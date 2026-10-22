@@ -1,5 +1,5 @@
 /**
- * DriveCard — one share/download in the two-column grid (Figma #12).
+ * DriveCard — one share/download in the card grid.
  *
  * Thumbnail · title (+ gold star when favourited) · status line · progress
  * bar while transferring · contextual buttons · ⋮ menu. Click opens the file
@@ -17,6 +17,7 @@ import { Icon } from '../ui/Icon'
 import { useMenu } from '../ui/Menu'
 import { ProgressBar } from '../ui/Progress'
 import { Spinner } from '../ui/Spinner'
+import { VIcon } from '../ui/VIcon'
 import { DriveMenuButton } from './DriveMenuButton'
 import { CancellingOverlay, DeleteCountdown } from './DriveOverlays'
 import { DriveRowActions } from './DriveRowActions'
@@ -53,25 +54,29 @@ export const DriveCard = memo(function DriveCard({ drive, fileCount, highlighted
         if (!busy && !drive.isPlaceholder) menu.openAt({ x: e.clientX, y: e.clientY })
       }}
       className={cn(
-        'group relative flex min-w-0 cursor-default items-center gap-4 rounded-card px-3 py-3.5 transition-colors',
+        'group relative flex min-w-0 cursor-default items-center gap-3 rounded-card px-2 py-2.5 transition-colors',
         !busy && 'hover:bg-fg/[0.04]',
         highlighted && 'animate-highlight'
       )}
     >
       {drive.isPlaceholder ? (
-        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[12px] bg-fg/[0.06]">
-          <Spinner className="h-6 w-6 text-warning" />
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[9px] bg-fg/[0.06]" title={drive.shareLink}>
+          {drive.receive?.phase === 'waiting' ? (
+            <VIcon name="directbox-receive" size={20} className="text-warning" />
+          ) : (
+            <Spinner className="h-4 w-4 text-warning" />
+          )}
         </div>
       ) : (
-        <DriveThumb drive={drive} title={drive.title} />
+        <DriveThumb drive={drive} title={drive.title} size={40} />
       )}
 
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate text-[16px] font-bold text-fg" title={drive.title}>
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <div className="flex min-w-0 items-center gap-1">
+          <span className="truncate text-[13px] font-semibold text-fg" title={drive.title}>
             {drive.title}
           </span>
-          {drive.favorite && <Icon name="star" className="h-3.5 w-3.5 shrink-0 text-star" label="Favorite" />}
+          {drive.favorite && <Icon name="star" className="h-3 w-3 shrink-0 text-star" label="Favorite" />}
         </div>
         <DriveStatusLine drive={drive} fileCount={fileCount} />
         {showProgress && <ProgressBar value={drive.progress ?? 0} tone="warning" className="mt-1" />}

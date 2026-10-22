@@ -5,8 +5,9 @@
  * frosted glass panel, 22px corners, soft border; the overlay behind it is a
  * plain dim (never blurred itself — the panel's blur needs something sharp
  * behind it). Size presets encode the agreed exceptions:
- *   standard 760×520 (Send, Receive, Folder) · tall 520×760 (File Info)
- *   compact 460×auto (Rename, Share link) · narrow 440×auto (QR scanner, confirms)
+ *   standard 600×440 (Send, Receive, Folder) · tall 420×600 (File Info)
+ *   compact 380×auto (Rename, Share link) · narrow 360×auto (QR scanner, confirms)
+ * (all shrink to fit the 600×440 minimum window)
  *
  * Escape and backdrop click close only the top-most dialog (`isTop`).
  *
@@ -23,10 +24,10 @@ import { IconButton } from './IconButton'
 export type ModalSize = 'standard' | 'tall' | 'compact' | 'narrow'
 
 const SIZES: Record<ModalSize, string> = {
-  standard: 'w-[760px] min-h-[min(520px,calc(100vh-40px))] max-h-[min(520px,calc(100vh-40px))]',
-  tall: 'w-[520px] h-[min(760px,calc(100vh-40px))]',
-  compact: 'w-[460px] max-h-[calc(100vh-40px)]',
-  narrow: 'w-[440px] max-h-[calc(100vh-40px)]'
+  standard: 'w-[600px] min-h-[min(420px,calc(100vh-32px))] max-h-[min(440px,calc(100vh-32px))]',
+  tall: 'w-[420px] h-[min(600px,calc(100vh-32px))]',
+  compact: 'w-[380px] max-h-[calc(100vh-32px)]',
+  narrow: 'w-[360px] max-h-[calc(100vh-32px)]'
 }
 
 export interface ModalProps {
@@ -88,7 +89,7 @@ export function Modal({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[900] flex items-center justify-center p-5 animate-fade-in"
+      className="no-drag fixed inset-0 z-[900] flex items-center justify-center p-4 animate-fade-in"
       style={{ background: 'var(--pd-overlay)' }}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget && isTop && dismissible) onClose()
@@ -103,9 +104,9 @@ export function Modal({
         className={cn('glass relative flex max-w-full flex-col overflow-hidden rounded-modal text-fg outline-none animate-pop-in', SIZES[size], className)}
       >
         {(title || !hideClose || headerExtra) && (
-          <div className="flex shrink-0 items-center gap-3 px-6 pb-2 pt-5">
+          <div className="flex shrink-0 items-center gap-2 px-5 pb-1.5 pt-4">
             {title && (
-              <h2 id={titleId} className="min-w-0 flex-1 truncate text-[22px] font-bold">
+              <h2 id={titleId} className="min-w-0 flex-1 truncate text-[16px] font-semibold">
                 {title}
               </h2>
             )}
@@ -116,8 +117,8 @@ export function Modal({
             )}
           </div>
         )}
-        <div className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto px-6 pb-6', bodyClassName)}>{children}</div>
-        {footer && <div className="flex shrink-0 items-center justify-end gap-3 border-t border-fg/10 px-6 py-4">{footer}</div>}
+        <div className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-5', bodyClassName)}>{children}</div>
+        {footer && <div className="flex shrink-0 items-center justify-end gap-3 border-t border-fg/10 px-5 py-3">{footer}</div>}
       </div>
     </div>,
     document.body

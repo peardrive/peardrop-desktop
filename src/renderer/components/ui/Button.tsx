@@ -32,21 +32,22 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const VARIANTS: Record<ButtonVariant, string> = {
-  primary: 'bg-gradient-to-b from-accent to-[#8fb52a] text-accent-on border-2 border-transparent hover:brightness-110 active:brightness-95 shadow-[0_6px_18px_-6px_rgb(var(--pd-accent)/0.55)]',
-  soft: 'bg-accent/15 text-accent-strong border-2 border-accent/55 hover:bg-accent/25 hover:border-accent/80',
-  outline: 'bg-transparent text-accent-strong border-2 border-accent/70 hover:bg-accent/10',
-  secondary: 'bg-raised text-muted border-2 border-line hover:text-fg hover:border-subtle',
-  danger: 'bg-danger text-white border-2 border-transparent hover:brightness-110',
-  'danger-outline': 'bg-transparent text-danger border-2 border-danger/70 hover:bg-danger/10',
-  'warning-outline': 'bg-transparent text-warning border-2 border-warning/70 hover:bg-warning/10',
-  ghost: 'bg-transparent text-muted border-2 border-transparent hover:text-fg hover:bg-fg/5'
+  // Figma sidebar buttons: solid pear-green "Send", outlined "Receive" (8px radius, 1px line).
+  primary: 'bg-accent text-accent-on border border-transparent hover:brightness-110 active:brightness-95',
+  soft: 'bg-accent/10 text-accent-strong border border-accent/70 hover:bg-accent/20 hover:border-accent',
+  outline: 'bg-transparent text-accent-strong border border-accent/70 hover:bg-accent/10',
+  secondary: 'bg-fg/5 text-fg/85 border border-fg/10 hover:text-fg hover:bg-fg/10',
+  danger: 'bg-danger text-white border border-transparent hover:brightness-110',
+  'danger-outline': 'bg-transparent text-danger border border-danger/70 hover:bg-danger/10',
+  'warning-outline': 'bg-transparent text-warning border border-warning/70 hover:bg-warning/10',
+  ghost: 'bg-transparent text-muted border border-transparent hover:text-fg hover:bg-fg/5'
 }
 
 const SIZES: Record<ButtonSize, string> = {
-  xs: 'h-7 px-3 text-xs gap-1.5',
-  sm: 'h-8 px-4 text-[13px] gap-1.5',
-  md: 'h-10 px-5 text-sm gap-2',
-  lg: 'h-12 px-7 text-[15px] gap-2.5'
+  xs: 'h-6 px-2.5 text-[11px] gap-1',
+  sm: 'h-7 px-3 text-[12px] gap-1.5',
+  md: 'h-8 px-4 text-[13px] gap-1.5',
+  lg: 'h-10 px-5 text-sm gap-2'
 }
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
@@ -59,7 +60,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       type={type}
       disabled={disabled || loading}
       className={cn(
-        'inline-flex select-none items-center justify-center whitespace-nowrap rounded-full font-bold transition-[background,border-color,color,filter,opacity] duration-150',
+        'inline-flex select-none items-center justify-center whitespace-nowrap rounded-lg font-semibold transition-[background,border-color,color,filter,opacity] duration-150',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-panel',
         'disabled:pointer-events-none disabled:opacity-45',
         VARIANTS[variant],

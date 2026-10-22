@@ -23,7 +23,7 @@ export function SharePill() {
         setBackgrounded(false)
         if (!useUiStore.getState().isOpen('send')) useUiStore.getState().openModal({ type: 'send' })
       }}
-      className="glass fixed bottom-6 right-6 z-[1050] flex items-center gap-2.5 rounded-full px-4 py-2.5 text-sm font-bold shadow-menu animate-slide-up hover:brightness-110"
+      className="glass fixed bottom-6 right-6 z-[1050] flex items-center gap-2.5 rounded-full px-4 py-2.5 text-[12px] font-bold shadow-menu animate-slide-up hover:brightness-110"
     >
       <Spinner className="h-4 w-4 text-accent" />
       <span>Sharing</span>

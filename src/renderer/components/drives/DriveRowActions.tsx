@@ -22,34 +22,38 @@ export function DriveRowActions({ drive, onAction }: DriveRowActionsProps) {
     fn()
   }
   return (
-    <div className="flex shrink-0 items-center gap-2">
+    <div className="flex shrink-0 items-center gap-1.5">
       {actions.map((a) => {
         switch (a) {
           case 'resume':
             return <IconButton key={a} icon="play" label="Resume" tone="accent" ringed size="sm" onClick={stop(() => onAction(a))} />
+          case 'search':
+            return <IconButton key={a} icon="refresh" label="Look for the sender now" tone="accent" ringed size="sm" onClick={stop(() => onAction(a))} />
           case 'cancel':
-            return <IconButton key={a} icon="close" label="Cancel" tone="danger" ringed size="sm" onClick={stop(() => onAction(a))} />
+            return (
+              <IconButton key={a} icon="close" label={drive.receive ? 'Forget this link' : 'Cancel'} tone="danger" ringed size="sm" onClick={stop(() => onAction(a))} />
+            )
           case 'retry':
             return (
-              <Button key={a} size="sm" variant="danger-outline" onClick={stop(() => onAction(a))}>
+              <Button key={a} size="xs" variant="danger-outline" onClick={stop(() => onAction(a))}>
                 {partial ? 'Resume' : 'Retry'}
               </Button>
             )
           case 'reshare':
             return (
-              <Button key={a} size="sm" variant="outline" onClick={stop(() => onAction(a))}>
+              <Button key={a} size="xs" variant="outline" onClick={stop(() => onAction(a))}>
                 Share
               </Button>
             )
           case 'clear':
             return (
-              <Button key={a} size="sm" variant="danger-outline" onClick={stop(() => onAction(a))}>
+              <Button key={a} size="xs" variant="danger-outline" onClick={stop(() => onAction(a))}>
                 Clear
               </Button>
             )
           case 'open':
             return (
-              <Button key={a} size="sm" variant="outline" onClick={stop(() => onAction(a))}>
+              <Button key={a} size="xs" variant="outline" onClick={stop(() => onAction(a))}>
                 Open
               </Button>
             )

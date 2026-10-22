@@ -48,8 +48,28 @@ const api: PeardropApi = {
       return viaUtils ? viaUtils(file) : ((file as File & { path?: string }).path ?? '')
     }
   },
+  receive: {
+    list: () => invoke('receive:list'),
+    add: (link) => invoke('receive:add', link),
+    remove: (id) => invoke('receive:remove', id),
+    retry: (id) => invoke('receive:retry', id),
+    onChange: (cb) => subscribe('receive:changed', cb)
+  },
+  network: {
+    stats: () => invoke('network:stats'),
+    onStats: (cb) => subscribe('network:stats', cb)
+  },
+  window: {
+    state: () => invoke('window:state'),
+    act: (action) => invoke('window:action', action),
+    onState: (cb) => subscribe('window:state', cb),
+    setChrome: (chrome) => invoke('window:set-chrome', chrome)
+  },
   qr: { generate: (text) => invoke('qr:generate', text) },
-  app: { info: () => invoke('app:info') },
+  app: {
+    info: () => invoke('app:info'),
+    onCommand: (cb) => subscribe('app:command', cb)
+  },
   settings: {
     get: () => invoke('settings:get'),
     update: (patch) => invoke('settings:update', patch),

@@ -6,7 +6,6 @@
  * @example <LibraryView />
  */
 import { reloadEngine } from '../../controllers/engine'
-import { openSend } from '../../controllers/share'
 import { useVisibleDrives } from '../../hooks/useDrives'
 import { useDrivesStore } from '../../stores/drives-store'
 import { useSettingsStore } from '../../stores/settings-store'
@@ -26,7 +25,7 @@ export function LibraryView() {
   const engine = useSettingsStore((s) => s.engine)
   const tab = useUiStore((s) => s.tab)
   const search = useUiStore((s) => s.search)
-  const { setSearch, setKindFilter, setStatusFilter, openModal, setPage } = useUiStore.getState()
+  const { setSearch, setStatusFilter, setPage } = useUiStore.getState()
 
   if (engine?.phase === 'error') {
     return (
@@ -36,11 +35,11 @@ export function LibraryView() {
         title="The transfer engine is not running"
         body={engine.error ?? 'It failed to start. Your shares are safe and will come back once it does.'}
         action={
-          <div className="flex gap-3">
-            <Button variant="secondary" onClick={() => setPage('settings')}>
+          <div className="flex gap-2">
+            <Button size="sm" variant="secondary" onClick={() => setPage('settings')}>
               Network settings
             </Button>
-            <Button variant="primary" leading={<Icon name="refresh" />} onClick={() => void reloadEngine()}>
+            <Button size="sm" variant="primary" leading={<Icon name="refresh" className="h-3.5 w-3.5" />} onClick={() => void reloadEngine()}>
               Retry
             </Button>
           </div>
@@ -51,47 +50,47 @@ export function LibraryView() {
 
   if (!loaded) {
     return (
-      <div className="flex flex-1 items-center justify-center gap-3 text-muted">
-        <Spinner className="h-5 w-5 text-accent" /> {engine?.phase === 'reloading' ? 'Restarting engine…' : 'Loading your shares…'}
+      <div className="flex flex-1 items-center justify-center gap-2 py-10 text-[12px] text-muted">
+        <Spinner className="h-4 w-4 text-accent" /> {engine?.phase === 'reloading' ? 'Restarting engine…' : 'Loading your shares…'}
       </div>
     )
   }
 
   if (total === 0) {
-    return tab === 'favorites' ? (
-      <EmptyState icon="star" tone="muted" title="Nothing pinned yet" body="Add shares to Favorites from their ⋮ menu to keep them here." />
-    ) : (
-      <EmptyState
-        icon="folder-outline"
-        tone="accent"
-        title="Nothing shared yet"
-        body="Drop files anywhere in this window, or use Send. Paste a link with Receive to download."
-        action={
-          <div className="flex gap-3">
-            <Button variant="primary" leading={<Icon name="arrow-up" />} onClick={openSend}>
-              Send files
-            </Button>
-            <Button variant="soft" leading={<Icon name="arrow-down" />} onClick={() => openModal({ type: 'receive' })}>
-              Receive
-            </Button>
-          </div>
-        }
-      />
-    )
+    switch (tab) {
+      case 'favorites':
+        return <EmptyState icon={{ vicon: 'star' }} title="Nothing pinned yet" body={'Add files to Favorites\nfrom their ⋮ menu'} />
+      case 'received':
+        return (
+          <EmptyState
+            icon={{ vicon: 'directbox-receive' }}
+            title="Nothing received yet"
+            body={'Paste a link with Receive\nto download it here'}
+          />
+        )
+      default:
+        return (
+          <EmptyState
+            icon={{ vicon: 'directbox-send-bold' }}
+            title="Nothing shared yet"
+            body={'Drop a file or photo here, or use Send\nto start sharing'}
+          />
+        )
+    }
   }
 
   if (items.length === 0) {
     return (
       <EmptyState
-        icon="search"
+        icon={{ vicon: 'search-normal' }}
         title="No matches"
         body={search ? <>Nothing here matches “{search.trim()}”.</> : 'No items match the current filter.'}
         action={
           <Button
             variant="secondary"
+            size="sm"
             onClick={() => {
               setSearch('')
-              setKindFilter('all')
               setStatusFilter('any')
             }}
           >

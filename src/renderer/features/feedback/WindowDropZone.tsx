@@ -48,8 +48,8 @@ export function WindowDropZone() {
   }, [])
   if (!active) return null
   return (
-    <div className="pointer-events-none fixed inset-3 z-[800] flex items-center justify-center rounded-[22px] border-[3px] border-dashed border-accent/70 bg-accent/10 animate-fade-in">
-      <div className="glass flex items-center gap-3 rounded-full px-6 py-3 text-lg font-bold">
+    <div className="pointer-events-none fixed inset-3 z-[800] flex items-center justify-center rounded-[16px] border-[3px] border-dashed border-accent/70 bg-accent/10 animate-fade-in">
+      <div className="glass flex items-center gap-3 rounded-full px-4 py-3 text-[14px] font-bold">
         <Icon name="arrow-up" className="h-5 w-5 text-accent-strong" /> Drop to share
       </div>
     </div>
