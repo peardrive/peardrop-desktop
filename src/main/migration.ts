@@ -16,7 +16,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import type { PeardropPaths } from '../engine/paths'
+import type { PeardropPaths } from '@engine/paths'
 import type { Logger } from './logger'
 
 export interface MigrationOutcome {

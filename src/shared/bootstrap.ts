@@ -2,8 +2,6 @@
  * DHT bootstrap address helpers, shared by the main process (to configure
  * Hyperswarm) and the renderer (to validate the Settings input live).
  *
- * Mirrors src/engine/network.js, which the plain-Node CLI uses. The parity
- * test in test/bootstrap-parity.test.ts keeps both in lock-step.
  * Ported from pearcore/src/utils/parsers.utils.js (parseBootstrapAddress).
  */
 

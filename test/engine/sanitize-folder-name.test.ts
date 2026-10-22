@@ -7,10 +7,10 @@
  * equivalents should fail on mobile — divergence would be visible.
  */
 
-const test = require('node:test');
-const assert = require('node:assert/strict');
+import { test } from 'vitest';
+import assert from 'node:assert/strict';
 
-const { sanitizeFolderName } = require('../src/engine/file-utils');
+import { sanitizeFolderName } from '@engine/file-utils';
 
 test('sanitizeFolderName: plain ASCII name passes through', () => {
     assert.equal(sanitizeFolderName('MyProject'), 'MyProject');
@@ -107,7 +107,7 @@ test('sanitizeFolderName: mixed slashes with a real name', () => {
 
 test('sanitizeFolderName: null result must not be usable as a path segment', () => {
     // Documenting the caller contract: a null return signals "no wrap".
-    // Every caller in downloader.js and hyperdrive-manager.js checks
+    // Every caller in downloader.ts checks
     // truthiness on the return value before path.join. This test is a
     // lock-in for the null-return contract so a future refactor that
     // "helpfully" returned "" or "unnamed" instead of null would break

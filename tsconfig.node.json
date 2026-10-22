@@ -13,7 +13,7 @@
     "src/main/**/*",
     "src/preload/**/*",
     "src/shared/**/*",
-    "src/engine/**/*.d.ts",
+    "src/engine/**/*",
     "app.config.json"
   ]
 }

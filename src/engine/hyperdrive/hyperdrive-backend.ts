@@ -1,7 +1,7 @@
 /**
  * HyperdriveBackend — TransferBackend implemented on the Holepunch stack
- * (Hyperdrive + Corestore + Hyperswarm) through the existing, battle-tested
- * engine in src/engine (HyperdriveManager + downloader).
+ * (Hyperdrive + Corestore + Hyperswarm) through HyperdriveManager and the
+ * downloader in this folder.
  *
  * The handler bodies below are the former src/main.js IPC handlers, moved
  * here nearly verbatim so their hard-won edge-case handling (download guard,
@@ -14,7 +14,8 @@
  *     "reload engine" and custom bootstrappers possible.
  *
  * 🔒 SACRED CORE: createDrive / openDrive / swarm join+replicate live in
- * src/engine/hyperdrive-manager.js and are called, never reimplemented.
+ * the manager modules (share.ts, receive.ts, seeding.ts) and are called
+ * here, never reimplemented.
  */
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs/promises'
@@ -31,10 +32,6 @@ import type {
   SimpleResult,
   TransferEvent
 } from '@shared/transfer'
-import { downloadFromDrive } from '../../../engine/downloader'
-import { EngineError } from '../../../engine/engine-errors'
-import { DriveState as EngineDriveState, HyperdriveManager, type ManifestDriveEntry } from '../../../engine/hyperdrive-manager'
-import type { Logger } from '../../logger'
 import {
   ShareCancelledError,
   type BackendContext,
@@ -44,18 +41,31 @@ import {
   type NetworkCounters,
   type TransferBackend
 } from '../backend'
+import { EngineError } from '../engine-errors'
+import type { Logger } from '../logger'
+import { downloadFromDrive } from './downloader'
+import { HyperdriveManager } from './manager'
+import { LINK_SCHEME } from './share-link'
+import {
+  DriveState as EngineDriveState,
+  type DriveFileEntry,
+  type ManagerEventName,
+  type ManagerEvents,
+  type ManifestDriveEntry,
+  type RemoteFile
+} from './types'
 
 /** A run older than this is treated as dead and superseded. */
 const STALE_DOWNLOAD_MS = 5 * 60 * 1000
 /** A cancel must always resolve, even if the engine is stuck. */
 const CANCEL_SAFETY_NET_MS = 4000
 
-const LINK_PREFIX = 'peardrop://'
 
 /** Manifest file names arrive as "/a.txt"; the UI wants "a.txt" and keeps the key. */
-function toDriveFile(f: { name: string; size?: number; path?: string; key?: string; displayName?: string }): DriveFile {
-  const key = f.key ?? (f.name?.startsWith('/') ? f.name : undefined)
+function toDriveFile(f: DriveFileEntry | RemoteFile): DriveFile {
+  const key = ('key' in f ? f.key : undefined) ?? (f.name?.startsWith('/') ? f.name : undefined)
   const name = f.displayName || (f.name ? path.posix.basename(f.name.replace(/\\/g, '/')) : 'file')
+
   return {
     name,
     size: Number(f.size) || 0,
@@ -66,19 +76,22 @@ function toDriveFile(f: { name: string; size?: number; path?: string; key?: stri
 
 export function toRecord(entry: ManifestDriveEntry): DriveRecord {
   return {
-    id: (entry.driveId || (entry as { id?: string }).id) as string,
+    id: entry.driveId || (entry as { id?: string }).id || '',
     name: entry.name || 'Untitled Share',
-    state: (entry.state || 'active') as DriveState,
+    state: (entry.state || EngineDriveState.ACTIVE) as DriveState,
     isUpload: entry.isUpload !== false,
     files: (entry.files || []).map(toDriveFile),
     totalBytes: entry.totalBytes || 0,
-    shareLink: entry.shareLink || (entry.key ? `${LINK_PREFIX}${entry.key}` : undefined),
+    shareLink: entry.shareLink || (entry.key ? `${LINK_SCHEME}${entry.key}` : undefined),
     localPath: entry.localPath ?? null,
     createdAt: entry.createdAt
   }
 }
 
-const keyFromLink = (link: string) => link.trim().replace(/^peardrop:\/\//i, '').toLowerCase()
+/** The drive key in a link, lowercased (no validation: used for duplicate lookups). */
+function keyFromLink(link: string): string {
+  return link.trim().replace(/^peardrop:\/\//i, '').toLowerCase()
+}
 
 export class HyperdriveBackend implements TransferBackend {
   readonly id = 'hyperdrive'
@@ -87,7 +100,7 @@ export class HyperdriveBackend implements TransferBackend {
   private readonly emitter = new EventEmitter()
   private readonly log: Logger
   private manager: HyperdriveManager
-  private readonly managerListeners: Array<[string, (...args: any[]) => void]> = []
+  private readonly managerListeners: Array<[ManagerEventName, (...args: any[]) => void]> = []
 
   /** Shares whose DHT topic has been announced (reachable by link holders). */
   private readonly announced = new Set<string>()
@@ -107,14 +120,11 @@ export class HyperdriveBackend implements TransferBackend {
     this.emitter.setMaxListeners(50)
   }
 
-  // ───────────────────────────── lifecycle ─────────────────────────────
-
   private createManager(): HyperdriveManager {
     const { paths, network } = this.ctx
     return new HyperdriveManager({
       drivesDir: paths.drivesDir,
       manifestPath: paths.stateFile,
-      downloadsDir: paths.downloadsDir,
       swarmOptions: network.bootstrap.length ? { bootstrap: network.bootstrap } : {}
     })
   }
@@ -153,7 +163,9 @@ export class HyperdriveBackend implements TransferBackend {
       this.manager.abortAllConnections({ force }).catch(() => undefined),
       this.manager.stopAll({ delete: false, persistState: opts.persistState ?? false, force })
     ])
-    for (const [event, fn] of this.managerListeners) this.manager.removeListener(event, fn)
+    for (const [event, fn] of this.managerListeners) {
+      this.manager.removeListener(event, fn)
+    }
     this.managerListeners.length = 0
     this.announced.clear()
     this.log.info('Stopped')
@@ -169,13 +181,32 @@ export class HyperdriveBackend implements TransferBackend {
   }
 
   private bindManagerEvents(): void {
-    const on = (event: string, fn: (data: any) => void) => {
+    const on = <K extends ManagerEventName>(event: K, fn: (data: ManagerEvents[K]) => void) => {
       this.manager.on(event, fn)
-      this.managerListeners.push([event, fn])
+      this.managerListeners.push([event, fn as (...args: any[]) => void])
     }
-    on('peer-connected', (d) => this.emit({ type: 'peer-connected', driveId: d.driveId, peerId: d.peerId, publicKey: d.publicKey, at: d.at }))
-    on('peer-disconnected', (d) => this.emit({ type: 'peer-disconnected', driveId: d.driveId, peerId: d.peerId, publicKey: d.publicKey, at: d.at }))
-    on('upload-progress', (d) =>
+
+    on('peer-connected', (d) => {
+      this.emit({
+        type: 'peer-connected',
+        driveId: d.driveId,
+        peerId: d.peerId,
+        publicKey: d.publicKey,
+        at: d.at
+      })
+    })
+
+    on('peer-disconnected', (d) => {
+      this.emit({
+        type: 'peer-disconnected',
+        driveId: d.driveId,
+        peerId: d.peerId,
+        publicKey: d.publicKey,
+        at: d.at
+      })
+    })
+
+    on('upload-progress', (d) => {
       this.emit({
         type: 'transfer-progress',
         driveId: d.driveId,
@@ -185,12 +216,30 @@ export class HyperdriveBackend implements TransferBackend {
         totalBytes: d.totalBytes,
         speed: d.speed || 0
       })
-    )
-    on('upload-complete', (d) => this.emit({ type: 'transfer-complete', driveId: d.driveId, peerId: d.peerId, totalBytes: d.totalBytes, duration: d.duration }))
-    on('share-started', (d) =>
-      this.emit({ type: 'share-started', driveId: d.driveId, clientJobId: d.clientJobId ?? null, name: d.name ?? null, filesTotal: d.filesTotal, bytesTotal: d.bytesTotal })
-    )
-    on('share-progress', (d) =>
+    })
+
+    on('upload-complete', (d) => {
+      this.emit({
+        type: 'transfer-complete',
+        driveId: d.driveId,
+        peerId: d.peerId,
+        totalBytes: d.totalBytes,
+        duration: d.duration
+      })
+    })
+
+    on('share-started', (d) => {
+      this.emit({
+        type: 'share-started',
+        driveId: d.driveId,
+        clientJobId: d.clientJobId ?? null,
+        name: d.name ?? null,
+        filesTotal: d.filesTotal,
+        bytesTotal: d.bytesTotal
+      })
+    })
+
+    on('share-progress', (d) => {
       this.emit({
         type: 'share-progress',
         driveId: d.driveId,
@@ -200,26 +249,39 @@ export class HyperdriveBackend implements TransferBackend {
         bytesTotal: d.bytesTotal,
         currentFile: d.currentFile ?? null
       })
-    )
-    on('download-peer-disconnected', (d) => this.emit({ type: 'download-peer-disconnected', driveId: d.driveId }))
+    })
+
+    on('download-peer-disconnected', (d) => {
+      this.emit({ type: 'download-peer-disconnected', driveId: d.driveId })
+    })
+
     on('drive-ready-to-download', (d) => {
       this.log.info('Resumed download reconnected', { driveId: d.driveId })
-      this.emit({ type: 'drive-ready-to-download', driveId: d.driveId, shareLink: d.shareLink, shareName: d.shareName ?? null, totalBytes: d.totalBytes || 0 })
+      this.emit({
+        type: 'drive-ready-to-download',
+        driveId: d.driveId,
+        shareLink: d.shareLink,
+        shareName: d.shareName ?? null,
+        totalBytes: d.totalBytes || 0
+      })
     })
-    on('drive-resume-failed', (d) => this.emit({ type: 'drive-resume-failed', driveId: d.driveId, error: d.error }))
-    // Announces fire during init — record them so a renderer that attaches
+
+    on('drive-resume-failed', (d) => {
+      this.emit({ type: 'drive-resume-failed', driveId: d.driveId, error: d.error })
+    })
+
+    // Announces fire during init: record them so a renderer that attaches
     // later still learns which shares are reachable.
     on('drive-announced', (d) => {
       if (d?.driveId) this.announced.add(d.driveId)
       this.emit({ type: 'drive-announced', driveId: d.driveId, at: d.at })
     })
+
     on('drive-announce-failed', (d) => {
       if (d?.driveId) this.announced.delete(d.driveId)
       this.emit({ type: 'drive-announce-failed', driveId: d.driveId, error: d.error })
     })
   }
-
-  // ───────────────────────────── queries ─────────────────────────────
 
   snapshot(): LibrarySnapshot {
     const resumeErrors: LibrarySnapshot['resumeErrors'] = {}
@@ -239,8 +301,6 @@ export class HyperdriveBackend implements TransferBackend {
   stats() {
     return { drives: this.manager.getAllDriveEntries().length, active: this.manager.activeDrives.size }
   }
-
-  // ───────────────────────────── sharing ─────────────────────────────
 
   cancelShare(driveId: string): boolean {
     return this.manager.cancelShare(driveId)
@@ -262,7 +322,11 @@ export class HyperdriveBackend implements TransferBackend {
       if ((err as { cancelled?: boolean })?.cancelled) throw new ShareCancelledError()
       throw err
     }
-    this.log.info('Share created', { driveId: result.driveId, files: input.files.length, totalBytes: input.totalBytes })
+    this.log.info('Share created', {
+      driveId: result.driveId,
+      files: input.files.length,
+      totalBytes: input.totalBytes
+    })
 
     const files = input.files.map((f) => ({ name: f.name, path: f.path, size: f.size }))
     const entry = await this.manager.addDriveEntry({
@@ -281,8 +345,6 @@ export class HyperdriveBackend implements TransferBackend {
     this.emit({ type: 'drive-added', record })
     return { driveId: result.driveId, shareLink: result.shareLink, record, files: record.files }
   }
-
-  // ───────────────────────────── receiving ─────────────────────────────
 
   async checkLink(link: string): Promise<DuplicateCheckResult> {
     const existing = this.manager.getDriveEntryByKey(keyFromLink(link))
@@ -303,7 +365,13 @@ export class HyperdriveBackend implements TransferBackend {
       if (driveKey && !opts.force) {
         const dup = await this.checkLink(link)
         if (dup.isDuplicate) {
-          return { success: true, isDuplicate: true, driveId: dup.driveId, localStatus: dup.localStatus, existing: dup.existing }
+          return {
+            success: true,
+            isDuplicate: true,
+            driveId: dup.driveId,
+            localStatus: dup.localStatus,
+            existing: dup.existing
+          }
         }
       }
       const r = await this.manager.openDrive(link)
@@ -333,7 +401,10 @@ export class HyperdriveBackend implements TransferBackend {
    * rather than the error's payload: a download killed by its storage being
    * torn down throws an error carrying no file list at all.
    */
-  private async purgeCancelledDownload(driveId: string, knownFiles?: Array<{ path?: string; destPath?: string }> | null) {
+  private async purgeCancelledDownload(
+    driveId: string,
+    knownFiles?: Array<{ path?: string; destPath?: string }> | null
+  ) {
     const info = this.downloadRoots.get(driveId)
     this.downloadRoots.delete(driveId)
     // A just-destroyed write stream can hold the file open for a moment on
@@ -355,11 +426,15 @@ export class HyperdriveBackend implements TransferBackend {
     }
 
     if (info?.isOwnFolder && info.root) {
-      if (await rmWithRetry(info.root, true)) this.log.info('Removed cancelled download folder', { root: info.root })
+      if (await rmWithRetry(info.root, true)) {
+        this.log.info('Removed cancelled download folder', { root: info.root })
+      }
     } else {
       for (const f of knownFiles || []) {
         const target = f?.path || f?.destPath
-        if (target && (await rmWithRetry(target))) this.log.info('Removed cancelled download file', { target })
+        if (target && (await rmWithRetry(target))) {
+          this.log.info('Removed cancelled download file', { target })
+        }
       }
     }
 
@@ -437,7 +512,10 @@ export class HyperdriveBackend implements TransferBackend {
     // write the same files and fight over the same card.
     const startedAt = this.activeDownloads.get(driveId)
     if (startedAt && Date.now() - startedAt < STALE_DOWNLOAD_MS) {
-      this.log.warn('Download already running — ignoring duplicate start', { driveId, runningForMs: Date.now() - startedAt })
+      this.log.warn('Download already running — ignoring duplicate start', {
+        driveId,
+        runningForMs: Date.now() - startedAt
+      })
       return { success: false, alreadyRunning: true, error: 'Download already in progress' }
     }
     if (startedAt) {
@@ -470,7 +548,11 @@ export class HyperdriveBackend implements TransferBackend {
           this.reconnect(driveId)
           return { success: false, notReady: true, error: 'Reconnecting to the sender…' }
         }
-        throw new EngineError({ category: 'receive.no-session', cause: 'session-not-found', message: 'Session not found' })
+        throw new EngineError({
+          category: 'receive.no-session',
+          cause: 'session-not-found',
+          message: 'Session not found'
+        })
       }
 
       // Never run the loop against a drive that has not synced: no manifest
@@ -480,7 +562,11 @@ export class HyperdriveBackend implements TransferBackend {
       if (!hasManifest && knownBytes === 0) {
         this.log.warn('Refusing to download: drive has not synced yet', { driveId })
         this.activeDownloads.delete(driveId)
-        return { success: false, notReady: true, error: 'Still connecting to the sender — no file list received yet' }
+        return {
+          success: false,
+          notReady: true,
+          error: 'Still connecting to the sender — no file list received yet'
+        }
       }
 
       // Resume into the same files a previous attempt used.
@@ -520,7 +606,15 @@ export class HyperdriveBackend implements TransferBackend {
             speed: data.speed ?? 0
           })
         },
-        onComplete: (data) => this.emit({ type: 'transfer-complete', driveId, peerId: 'self', totalBytes: data.totalBytes, duration: data.duration }),
+        onComplete: (data) => {
+          this.emit({
+            type: 'transfer-complete',
+            driveId,
+            peerId: 'self',
+            totalBytes: data.totalBytes,
+            duration: data.duration
+          })
+        },
         onError: (data) => this.log.warn('File error', data),
         isCancelled: () => this.cancelledDownloads.has(driveId),
         onRoot: (root, isOwnFolder) => this.downloadRoots.set(driveId, { root, isOwnFolder }),
@@ -536,7 +630,9 @@ export class HyperdriveBackend implements TransferBackend {
         this.clearDownloadState(driveId)
         return {
           success: false,
-          error: failedCount > 0 ? 'The sender went offline before any files transferred' : 'No files received — the sender had nothing to send yet',
+          error: failedCount > 0
+            ? 'The sender went offline before any files transferred'
+            : 'No files received — the sender had nothing to send yet',
           failed: result.failed
         }
       }
@@ -555,7 +651,7 @@ export class HyperdriveBackend implements TransferBackend {
       const entry = await this.manager.addDriveEntry({
         id: driveId,
         key: session.metadata?.key,
-        shareLink: session.shareLink || `${LINK_PREFIX}${session.metadata?.key || 'unknown'}`,
+        shareLink: session.shareLink || `${LINK_SCHEME}${session.metadata?.key || 'unknown'}`,
         name: session.shareName,
         files: result.files,
         totalBytes: result.totalBytes,
@@ -580,7 +676,14 @@ export class HyperdriveBackend implements TransferBackend {
       })
       this.emit({ type: 'drive-added', record })
       this.clearDownloadState(driveId)
-      return { success: true, partial: failedCount > 0, failed: result.failed, files: record.files, downloadPath, driveId }
+      return {
+        success: true,
+        partial: failedCount > 0,
+        failed: result.failed,
+        files: record.files,
+        downloadPath,
+        driveId
+      }
     } catch (error) {
       this.activeDownloads.delete(driveId)
       this.downloadAborters.delete(driveId)
@@ -588,7 +691,8 @@ export class HyperdriveBackend implements TransferBackend {
       if ((error as { cancelled?: boolean })?.cancelled || this.cancelledDownloads.has(driveId)) {
         this.cancelledDownloads.delete(driveId)
         this.log.info('Download cancelled by user', { driveId })
-        await this.purgeCancelledDownload(driveId, (error as { partialFiles?: Array<{ path?: string }> })?.partialFiles)
+        const partialFiles = (error as { partialFiles?: Array<{ path?: string }> })?.partialFiles
+        await this.purgeCancelledDownload(driveId, partialFiles)
         return { success: false, cancelled: true, error: 'Download cancelled' }
       }
       this.log.error('Download failed', error)
@@ -622,30 +726,37 @@ export class HyperdriveBackend implements TransferBackend {
     this.downloadRoots.delete(driveId)
   }
 
-  // ───────────────────────────── receive queue support ─────────────────────────────
-
   async release(driveId: string): Promise<void> {
     if (!driveId || this.manager.getDriveEntry(driveId)) return
     try {
-      if (this.manager.activeDrives.has(driveId)) await this.manager.stopDrive(driveId, { delete: false, persistState: false })
+      if (this.manager.activeDrives.has(driveId)) {
+        await this.manager.stopDrive(driveId, { delete: false, persistState: false })
+      }
     } catch (err) {
       this.log.warn('Release failed', { driveId, error: (err as Error).message })
     }
     // openDrive() made a Corestore folder for this id; nothing references it now.
-    await fs.rm(path.join(this.manager.drivesDir, driveId), { recursive: true, force: true }).catch(() => undefined)
+    const storagePath = path.join(this.manager.drivesDir, driveId)
+    await fs.rm(storagePath, { recursive: true, force: true }).catch(() => undefined)
   }
 
   async rediscover(driveId: string): Promise<SimpleResult> {
     const entry = this.manager.getDriveEntry(driveId)
-    if (!entry || entry.isUpload !== false) return { success: false, error: 'Not a download' }
+    if (!entry || entry.isUpload !== false) {
+      return { success: false, error: 'Not a download' }
+    }
     if (this.activeDownloads.has(driveId)) return { success: true }
     const session = this.manager.activeDrives.get(driveId)
     // A session that synced is fine as it is; only a data-less one is stuck.
     if (session && (session.manifest || session.totalBytes)) return { success: true }
-    if (this.reconnecting.has(driveId) || this.manager.pendingConnections.has(driveId)) return { success: true }
+    if (this.reconnecting.has(driveId) || this.manager.pendingConnections.has(driveId)) {
+      return { success: true }
+    }
     this.reconnecting.add(driveId)
     try {
-      if (session) await this.manager.stopDrive(driveId, { delete: false, persistState: false })
+      if (session) {
+        await this.manager.stopDrive(driveId, { delete: false, persistState: false })
+      }
       await this.manager.resumeDrive(driveId)
       return { success: true }
     } catch (err) {
@@ -655,8 +766,6 @@ export class HyperdriveBackend implements TransferBackend {
       this.reconnecting.delete(driveId)
     }
   }
-
-  // ───────────────────────────── network counters ─────────────────────────────
 
   /** Last byte counters seen per connection (UDX stream totals). */
   private readonly socketBytes = new WeakMap<object, { rx: number; tx: number }>()
@@ -693,14 +802,14 @@ export class HyperdriveBackend implements TransferBackend {
     return { peers: peers.size, connections, bytesIn: this.bytesIn, bytesOut: this.bytesOut }
   }
 
-  // ───────────────────────────── library ─────────────────────────────
-
   async pause(driveId: string) {
     if (!driveId) return { success: false, error: 'Missing drive id' }
     this.log.info('Pausing drive', { driveId })
     // No longer announced: it has left the swarm.
     this.announced.delete(driveId)
-    if (this.manager.activeDrives.get(driveId)) await this.manager.stopDrive(driveId, { delete: false })
+    if (this.manager.activeDrives.get(driveId)) {
+      await this.manager.stopDrive(driveId, { delete: false })
+    }
     const entry = await this.manager.pauseDriveEntry(driveId)
     if (!entry) return { success: false, error: 'Drive not found' }
     return { success: true, record: toRecord(entry) }
@@ -739,8 +848,13 @@ export class HyperdriveBackend implements TransferBackend {
       const reallyDeleteFiles = deleteFiles && !isUploadEntry
       const filesToDelete = reallyDeleteFiles && entryBefore ? (entryBefore.files || []).slice() : []
 
-      if (this.manager.activeDrives.get(driveId)) await this.manager.stopDrive(driveId, { delete: true })
-      const success = await this.manager.removeDriveEntry(driveId, { deleteFiles: reallyDeleteFiles, deleteStorage: true })
+      if (this.manager.activeDrives.get(driveId)) {
+        await this.manager.stopDrive(driveId, { delete: true })
+      }
+      const success = await this.manager.removeDriveEntry(driveId, {
+        deleteFiles: reallyDeleteFiles,
+        deleteStorage: true
+      })
 
       const touchedDirs = new Set<string>()
       for (const file of filesToDelete) {

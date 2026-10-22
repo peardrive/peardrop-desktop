@@ -20,16 +20,11 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import type { Logger } from '@engine/logger'
 import type { LogLevel } from '@shared/ipc'
 
-export interface Logger {
-  debug(message: string, data?: unknown): void
-  info(message: string, data?: unknown): void
-  warn(message: string, data?: unknown): void
-  error(message: string, data?: unknown): void
-  /** Derive a logger with a nested scope, e.g. "engine" → "engine:hyperdrive". */
-  child(scope: string): Logger
-}
+// The interface lives with the engine, which depends only on it.
+export type { Logger }
 
 export interface LogManagerOptions {
   dir: string

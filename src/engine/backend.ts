@@ -23,8 +23,8 @@ import type {
   SimpleResult,
   TransferEvent
 } from '@shared/transfer'
-import type { PeardropPaths } from '../../engine/paths'
-import type { Logger } from '../logger'
+import type { Logger } from './logger'
+import type { PeardropPaths } from './paths'
 
 /** A file to put into a new share — already flattened and de-duplicated. */
 export interface ShareFileInput {

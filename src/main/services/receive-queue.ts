@@ -32,7 +32,7 @@ import {
   type ReceiveTask
 } from '@shared/receive'
 import type { DownloadResult, OpenResult, SimpleResult, TransferEvent } from '@shared/transfer'
-import type { EngineHost } from '../engine/engine-host'
+import type { EngineHost } from '@engine/engine-host'
 import type { Logger } from '../logger'
 import { JsonStore } from '../stores/json-store'
 

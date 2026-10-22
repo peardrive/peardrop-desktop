@@ -4,7 +4,7 @@
  * - Picks the backend from the registry and builds its context (storage
  *   paths + network options).
  * - Resolves which DHT bootstrap nodes to use:
- *     environment (npm run dev) > preferences.network.bootstrap > public DHT
+ *     environment (npm run dev) > the saved bootstrap setting > public DHT
  * - `reload()` tears the backend down (leaving persisted state untouched),
  *   builds a fresh one with the current network options and starts it again.
  *   Shares resume and re-announce on the new swarm instances.
@@ -16,15 +16,24 @@ import { EventEmitter } from 'node:events'
 import { formatBootstrapList, parseBootstrapList, type BootstrapNode } from '@shared/bootstrap'
 import type { EngineReloadRequest, EngineReloadResult, EngineStatus } from '@shared/engine'
 import type { TransferEvent } from '@shared/transfer'
-import type { PeardropPaths } from '../../engine/paths'
-import type { Logger } from '../logger'
-import type { PreferencesStore } from '../stores/preferences-store'
 import type { NetworkCounters, TransferBackend } from './backend'
+import type { Logger } from './logger'
+import type { PeardropPaths } from './paths'
 import { BACKENDS, DEFAULT_BACKEND } from './registry'
+
+/**
+ * Where the user's custom bootstrap list is kept. The app backs this with
+ * its preferences; the engine only needs to read and save the one value.
+ */
+export interface BootstrapSetting {
+  /** The saved list ("host:port, …"); empty means the public DHT. */
+  get(): string
+  save(value: string): Promise<void>
+}
 
 export interface EngineHostOptions {
   paths: PeardropPaths
-  preferences: PreferencesStore
+  bootstrapSetting: BootstrapSetting
   log: Logger
   envBootstrap: string | null
   backend?: string
@@ -94,14 +103,22 @@ export class EngineHost extends EventEmitter {
   /** Bootstrap nodes for the next start, and where they came from. */
   private resolveNetwork(): { nodes: BootstrapNode[]; source: EngineStatus['bootstrapSource'] } {
     if (this.opts.envBootstrap) {
-      const parsed = parseBootstrapList(this.opts.envBootstrap)
-      if (parsed.ok && parsed.nodes.length) return { nodes: parsed.nodes, source: 'environment' }
+      const fromEnv = parseBootstrapList(this.opts.envBootstrap)
+      if (fromEnv.ok && fromEnv.nodes.length) {
+        return { nodes: fromEnv.nodes, source: 'environment' }
+      }
       this.log.warn('Ignoring invalid PEARDROP_BOOTSTRAP', { value: this.opts.envBootstrap })
     }
-    const pref = this.opts.preferences.get().network.bootstrap
-    const parsed = parseBootstrapList(pref)
-    if (parsed.ok && parsed.nodes.length) return { nodes: parsed.nodes, source: 'preferences' }
-    if (!parsed.ok) this.log.warn('Ignoring invalid bootstrap preference', { value: pref, error: parsed.error })
+
+    const saved = this.opts.bootstrapSetting.get()
+    const fromSetting = parseBootstrapList(saved)
+    if (fromSetting.ok && fromSetting.nodes.length) {
+      return { nodes: fromSetting.nodes, source: 'preferences' }
+    }
+    if (!fromSetting.ok) {
+      this.log.warn('Ignoring invalid bootstrap preference', { value: saved, error: fromSetting.error })
+    }
+
     return { nodes: [], source: 'public' }
   }
 
@@ -116,9 +133,18 @@ export class EngineHost extends EventEmitter {
 
   private async startInternal(): Promise<void> {
     const { nodes, source } = this.resolveNetwork()
-    this.setStatus({ phase: this.status.phase === 'reloading' ? 'reloading' : 'starting', bootstrap: nodes, bootstrapSource: source, error: null })
+    this.setStatus({
+      phase: this.status.phase === 'reloading' ? 'reloading' : 'starting',
+      bootstrap: nodes,
+      bootstrapSource: source,
+      error: null
+    })
     const entry = BACKENDS[this.backendId]
-    const backend = entry.create({ paths: this.opts.paths, network: { bootstrap: nodes }, log: this.log })
+    const backend = entry.create({
+      paths: this.opts.paths,
+      network: { bootstrap: nodes },
+      log: this.log
+    })
     this.backend = backend
     this.generation++
     this.unsubscribe = backend.onEvent((event: TransferEvent) => this.emit('event', event))
@@ -127,7 +153,10 @@ export class EngineHost extends EventEmitter {
       try {
         await backend.start()
         this.setStatus({ phase: 'ready', startedAt: Date.now(), error: null })
-        this.log.info('Engine ready', { backend: this.backendId, bootstrap: nodes.length ? formatBootstrapList(nodes) : 'public DHT' })
+        this.log.info('Engine ready', {
+          backend: this.backendId,
+          bootstrap: nodes.length ? formatBootstrapList(nodes) : 'public DHT'
+        })
       } catch (err) {
         this.log.error('Engine failed to start', err)
         this.setStatus({ phase: 'error', error: (err as Error).message })
@@ -165,14 +194,15 @@ export class EngineHost extends EventEmitter {
 
   /**
    * Restart hyperdrive + hyperswarm instances, optionally with a new
-   * bootstrap address (persisted to preferences first).
+   * bootstrap address (saved to the bootstrap setting first).
    */
   reload(req: EngineReloadRequest = {}): Promise<EngineReloadResult> {
     return this.serialize(async () => {
       if (req.bootstrap !== undefined) {
         const parsed = parseBootstrapList(req.bootstrap)
         if (!parsed.ok) return { success: false as const, error: parsed.error, status: this.getStatus() }
-        await this.opts.preferences.patch({ network: { bootstrap: parsed.nodes.length ? formatBootstrapList(parsed.nodes) : '' } })
+        const value = parsed.nodes.length ? formatBootstrapList(parsed.nodes) : ''
+        await this.opts.bootstrapSetting.save(value)
       }
       this.log.info('Reloading engine', { bootstrap: req.bootstrap ?? '(unchanged)' })
       let release!: () => void

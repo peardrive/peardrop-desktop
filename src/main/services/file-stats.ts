@@ -4,7 +4,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { ShareSource } from '@shared/transfer'
-import { normalizeUserPath } from '../../engine/file-utils'
+import { normalizeUserPath } from '@engine/file-utils'
 import type { Logger } from '../logger'
 
 async function enumerate(folder: string, base: string, log: Logger, out: NonNullable<ShareSource['contents']>) {

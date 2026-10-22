@@ -12,6 +12,7 @@
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
+      "@engine/*": ["src/engine/*"],
       "@shared/*": ["src/shared/*"],
       "@renderer/*": ["src/renderer/*"]
     }

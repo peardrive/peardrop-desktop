@@ -21,9 +21,9 @@
 import { app, BrowserWindow, dialog, nativeTheme } from 'electron'
 import type { AppCommand, IpcPushChannel, IpcPushMap } from '@shared/ipc'
 import { themeScheme, type Preferences } from '@shared/preferences'
-import { LEGACY_ROOT, type PeardropPaths } from '../engine/paths'
+import { LEGACY_ROOT, type PeardropPaths } from '@engine/paths'
 import { identity } from './app-identity'
-import { EngineHost } from './engine/engine-host'
+import { EngineHost } from '@engine/engine-host'
 import { registerIpc, windowState } from './ipc/register'
 import { push } from './ipc/typed-ipc'
 import type { Logger, LogManager } from './logger'
@@ -135,7 +135,12 @@ export class PearDropApp {
     // Engine (created here, started last)
     const host = new EngineHost({
       paths,
-      preferences: prefs,
+      bootstrapSetting: {
+        get: () => prefs.get().network.bootstrap,
+        save: async (value) => {
+          await prefs.patch({ network: { bootstrap: value } })
+        }
+      },
       log: logs.scope('engine'),
       envBootstrap: runtime.envBootstrap
     })

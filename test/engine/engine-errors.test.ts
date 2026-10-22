@@ -9,16 +9,16 @@
  * tested identically.
  */
 
-const test = require('node:test');
-const assert = require('node:assert/strict');
+import { test } from 'vitest';
+import assert from 'node:assert/strict';
 
-const {
+import {
     EngineError,
     PathTraversalError,
     FileStallError,
     wrapError,
     failure,
-} = require('../src/engine/engine-errors');
+} from '@engine/engine-errors';
 
 // EngineError base class --- //
 

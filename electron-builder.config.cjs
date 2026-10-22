@@ -24,7 +24,6 @@ module.exports = {
   },
   files: [
     'out/**/*',
-    'src/engine/**/*.js',
     'app.config.json',
     'assets/icons/**/*',
     'package.json',

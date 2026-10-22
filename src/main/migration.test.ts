@@ -1,13 +1,11 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { resolvePeardropPaths } from '@engine/paths'
 import { describe, expect, it } from 'vitest'
-import { createRequire } from 'node:module'
 import { migrateLegacyData } from './migration'
 import type { Logger } from './logger'
 
-const require = createRequire(import.meta.url)
-const { resolvePeardropPaths } = require('../engine/paths.js')
 const log: Logger = { debug() {}, info() {}, warn() {}, error() {}, child: () => log }
 
 describe('migrateLegacyData', () => {

@@ -14,7 +14,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
-import { resolvePeardropPaths, type PeardropPaths } from '../engine/paths'
+import { resolvePeardropPaths, type PeardropPaths } from '@engine/paths'
 import { identity } from './app-identity'
 import { LogManager } from './logger'
 import { PearDropApp } from './peardrop-app'

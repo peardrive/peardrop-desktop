@@ -7,13 +7,13 @@
  * getting the helper right gets both flows right.
  */
 
-const test = require('node:test');
-const assert = require('node:assert/strict');
+import { test } from 'vitest';
+import assert from 'node:assert/strict';
 
-const { computeTruncation } = require('../src/engine/file-utils');
+import { computeTruncation } from '@engine/file-utils';
 
 // The receive-side cap — same value as `DRIVE_MANIFEST_MAX_FILES` in
-// lib/hyperdrive-manager.js. Kept local to the tests to avoid coupling
+// src/engine/hyperdrive/drive-manifest.ts. Kept local to the tests to avoid coupling
 // test coverage to a specific constant location.
 const CAP = 1000;
 

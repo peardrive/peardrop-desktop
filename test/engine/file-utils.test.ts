@@ -3,11 +3,11 @@
  * Runs under `node --test` (built-in test runner, no framework).
  */
 
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const path = require('path');
+import { test } from 'vitest';
+import assert from 'node:assert/strict';
+import path from 'path';
 
-const { normalizeUserPath } = require('../src/engine/file-utils');
+import { normalizeUserPath } from '@engine/file-utils';
 
 const isWindows = process.platform === 'win32';
 

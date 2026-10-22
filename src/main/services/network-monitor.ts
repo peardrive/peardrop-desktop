@@ -11,7 +11,7 @@
  */
 import { EventEmitter } from 'node:events'
 import { EMPTY_NETWORK_STATS, type NetworkStats } from '@shared/engine'
-import type { EngineHost } from '../engine/engine-host'
+import type { EngineHost } from '@engine/engine-host'
 
 const SAMPLE_MS = 1000
 /** Weight of the newest second; ~3 s effective window. */

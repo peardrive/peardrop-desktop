@@ -9,15 +9,16 @@
  * applies.
  */
 
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-const { EventEmitter } = require('node:events');
+import { test } from 'vitest';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
 
-const { downloadFromDrive } = require('../src/engine/downloader');
-const { EngineError } = require('../src/engine/engine-errors');
+import { downloadFromDrive } from '@engine/hyperdrive/downloader';
+import { EngineError } from '@engine/engine-errors';
 
 // Drive mock. `entries` is the list of manifest keys the mock's list('/')
 // should yield. downloadFromDrive iterates and (this sprint) filters
@@ -41,7 +42,6 @@ function makeDriveMock(entries) {
             // Return an empty stream that completes immediately. The
             // downloader pipes it into a writeStream; we get a zero-byte
             // file per pulled entry. That's enough for the assertions.
-            const { Readable } = require('node:stream');
             return Readable.from([]);
         },
     };

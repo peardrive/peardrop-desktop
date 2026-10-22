@@ -93,10 +93,9 @@ npm run app          # build + run against the public DHT
 | `npm run build` | Compile main, preload and renderer into `out/` |
 | `npm run build:win` / `build:mac` / `build:linux` / `build:all` | Installers into `dist/` (electron-builder) |
 | `npm run build:dir` | Unpacked app — fastest packaging smoke test |
-| `npm run typecheck` · `npm test` · `npm run check` | TypeScript, engine + unit tests, both |
+| `npm run typecheck` · `npm test` · `npm run check` | TypeScript, tests (vitest), both |
 
 Typical local test: `npm run bootstrap` in one terminal, `npm run dev` and `npm run dev:peer` in two more.
-The CLI joins the same network with `PEARDROP_BOOTSTRAP=127.0.0.1:8787 peardrop share <file>`.
 
 ### App identity
 
@@ -150,7 +149,6 @@ This is how the internet was supposed to work.
 - **Cross-platform** - Windows, Mac, Linux
 - **Clean UI** - Dark theme with glassmorphism design
 - **Progress tracking** - See real transfer speeds and progress
-- **CLI tool** - Command line interface for automation
 - **QR codes** - Scan links with your phone camera
 - **Remembered links** - Pasted links wait for an offline sender, across restarts
 - **Background mode** - Lives in the tray with Send, Receive and Quit

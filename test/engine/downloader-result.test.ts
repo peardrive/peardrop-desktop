@@ -1,10 +1,8 @@
 /**
- * Tests for the receive migration.
+ * downloadFromDrive's result shape.
  * Covers:
  * downloadFromDrive now returns a `destDir` field pointing at the actual
  *     folder written to (post getUniqueFolderPath disambiguation).
- * formatCliError from bin/peardrop renders typed EngineError instances as
- *     "category: message" and passes raw errors through unchanged.
  * NOT covered (Electron-launch-required, listed in the closing summary for
  * the end gate):
  * Actual streaming byte transfer (OOM regression check).
@@ -14,19 +12,14 @@
  * Mobile interop.
  */
 
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-const { EventEmitter } = require('node:events');
+import { test } from 'vitest';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { EventEmitter } from 'node:events';
 
-const { downloadFromDrive } = require('../src/engine/downloader');
-const {
-    EngineError,
-    PathTraversalError,
-    FileStallError,
-} = require('../src/engine/engine-errors');
+import { downloadFromDrive } from '@engine/hyperdrive/downloader';
 
 // downloadFromDrive return shape --- //
 
@@ -121,83 +114,3 @@ test('downloadFromDrive: destDir disambiguates when folder already exists (R7)',
     }
 });
 
-// CLI formatCliError renders typed errors correctly --- //
-// We inline the helper (matching bin/peardrop lines 38-46) rather than
-// spawning the CLI as a subprocess — the CLI's `main().catch` and
-// `process.exit(1)` are hard to intercept and the helper is pure.
-
-function formatCliError(err) {
-    if (err instanceof EngineError) {
-        return `${err.category}: ${err.message}`;
-    }
-    return err && err.message ? err.message : String(err);
-}
-
-test('formatCliError: renders EngineError as "category: message"', () => {
-    const err = new EngineError({
-        category: 'receive.no-session',
-        cause: 'session-not-found',
-        message: 'Session not found',
-    });
-    assert.equal(formatCliError(err), 'receive.no-session: Session not found');
-});
-
-test('formatCliError: renders PathTraversalError (Sprint 4D lock-in) with category prefix', () => {
-    const err = new PathTraversalError('unsafe path outside download folder: ../evil', {
-        key: '../evil',
-    });
-    assert.equal(
-        formatCliError(err),
-        'receive.path-traversal: unsafe path outside download folder: ../evil',
-    );
-});
-
-test('formatCliError: renders FileStallError (Sprint 4D lock-in) with category prefix', () => {
-    const err = new FileStallError('stalled: no data for 60s', {
-        file: '/big.mp4',
-    });
-    assert.equal(formatCliError(err), 'receive.stall: stalled: no data for 60s');
-});
-
-test('formatCliError: passes raw Error through unchanged', () => {
-    const err = new Error('legacy raw error');
-    assert.equal(formatCliError(err), 'legacy raw error');
-});
-
-test('formatCliError: handles Error with no message', () => {
-    const err = new Error();
-    // Falls back to String(err) → "Error" from Error.prototype.toString.
-    // (Documented in notes as the ergonomic-edge-case fallback.)
-    assert.equal(formatCliError(err), 'Error');
-});
-
-test('formatCliError: handles non-Error thrown values', () => {
-    assert.equal(formatCliError('a bare string'), 'a bare string');
-    assert.equal(formatCliError(42), '42');
-    assert.equal(formatCliError(null), 'null');
-});
-
-// Migration correctness: openDrive no longer exposes downloadAll / downloadFile --- //
-// A tripwire. If a future refactor accidentally reintroduces the closures,
-// this test fails and forces a decision. We inspect the module's source
-// rather than instantiate a manager (which needs a HyperdriveManager).
-
-test('openDrive return no longer exposes downloadAll or downloadFile closures', () => {
-    const src = fs.readFileSync(
-        path.join(__dirname, '..', 'src', 'engine', 'hyperdrive-manager.js'),
-        'utf8',
-    );
-    // Any closure named downloadAll/downloadFile in the openDrive scope
-    // would appear as `downloadAll:` or `downloadFile:` in an object literal.
-    // Grep the source string for those key patterns.
-    assert.ok(!/^\s*downloadAll:/m.test(src),
-        'downloadAll closure should be retired from openDrive return');
-    assert.ok(!/^\s*downloadFile:/m.test(src),
-        'downloadFile closure should be retired from openDrive return');
-    // Sanity: the drive field the CLI now uses should be present.
-    assert.ok(/^\s*drive,/m.test(src) || /\bdrive:\s*drive\b/.test(src),
-        'openDrive return should expose the drive');
-    // Sanity: the close closure the CLI still uses should still be present.
-    assert.ok(/^\s*close:/m.test(src),
-        'close closure should still be present');
-});

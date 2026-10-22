@@ -10,8 +10,8 @@
  */
 import path from 'node:path'
 import type { ShareSource } from '@shared/transfer'
-import { normalizeUserPath } from '../../engine/file-utils'
-import type { CreateShareInput, ShareFileInput } from '../engine/backend'
+import { normalizeUserPath } from '@engine/file-utils'
+import type { CreateShareInput, ShareFileInput } from '@engine/backend'
 
 export class EmptyShareError extends Error {
   constructor() {

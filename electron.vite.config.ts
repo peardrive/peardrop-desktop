@@ -6,15 +6,16 @@
  *  - preload  (src/preload)   contextBridge API, CommonJS output
  *  - renderer (src/renderer)  React + Tailwind UI
  *
- * The P2P engine (src/engine/*.js) is plain CommonJS shared with the CLI, so
- * the main bundle runs it through the commonjs plugin. Runtime dependencies
- * (hyperswarm, corestore, …) stay external — they ship native prebuilds.
+ * The P2P engine (src/engine) is TypeScript bundled into main. Its runtime
+ * dependencies (hyperswarm, corestore, …) stay external — they ship native
+ * prebuilds.
  */
 import { resolve } from 'node:path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 
 const alias = {
+  '@engine': resolve(__dirname, 'src/engine'),
   '@shared': resolve(__dirname, 'src/shared'),
   '@renderer': resolve(__dirname, 'src/renderer')
 }
@@ -25,11 +26,7 @@ export default defineConfig({
     resolve: { alias },
     build: {
       outDir: 'out/main',
-      rollupOptions: { input: { index: resolve(__dirname, 'src/main/index.ts') } },
-      commonjsOptions: {
-        include: [/node_modules/, /src[\\/]engine[\\/]/],
-        transformMixedEsModules: true
-      }
+      rollupOptions: { input: { index: resolve(__dirname, 'src/main/index.ts') } }
     }
   },
   preload: {
