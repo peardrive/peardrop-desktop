@@ -18,7 +18,7 @@
  * engine, and it is stopped BEFORE the process exits, with persisted drive
  * states left untouched so shares resume next launch.
  */
-import { app, BrowserWindow, dialog, nativeTheme } from 'electron'
+import { app, BrowserWindow, dialog, nativeTheme, net } from 'electron'
 import type { AppCommand, IpcPushChannel, IpcPushMap } from '@shared/ipc'
 import { themeScheme, type Preferences } from '@shared/preferences'
 import type { StopProgress } from '@engine/backend'
@@ -192,7 +192,7 @@ export class PearDropApp {
 
     receiveQueue.on('change', (tasks) => this.pushToRenderer('receive:changed', tasks))
 
-    const network = new NetworkMonitor(host)
+    const network = new NetworkMonitor(host, () => net.isOnline())
     network.on('stats', (stats) => this.pushToRenderer('network:stats', stats))
 
     // IPC handlers must exist before the window loads, or the renderer's first calls would fail.

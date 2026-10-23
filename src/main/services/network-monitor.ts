@@ -26,7 +26,15 @@ export class NetworkMonitor extends EventEmitter {
   private emaIn = 0
   private emaOut = 0
 
-  constructor(private readonly engine: Pick<EngineHost, 'networkCounters'>) {
+  /**
+   * @param isOnline Whether the OS reports a network connection (Electron's
+   *   `net.isOnline()`); without one, the DHT is unreachable straight away
+   *   instead of after the next ping times out.
+   */
+  constructor(
+    private readonly engine: Pick<EngineHost, 'networkCounters'>,
+    private readonly isOnline: () => boolean = () => true
+  ) {
     super()
   }
 
@@ -78,11 +86,13 @@ export class NetworkMonitor extends EventEmitter {
       outbound: this.emaOut < IDLE_BPS ? 0 : Math.round(this.emaOut),
       totalIn: c.bytesIn,
       totalOut: c.bytesOut,
+      reachable: this.isOnline() ? c.reachable : false,
       at: now
     }
     const changed =
       next.peers !== this.stats.peers ||
       next.connections !== this.stats.connections ||
+      next.reachable !== this.stats.reachable ||
       next.inbound !== this.stats.inbound ||
       next.outbound !== this.stats.outbound
     this.stats = next

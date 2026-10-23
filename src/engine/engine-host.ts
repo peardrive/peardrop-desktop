@@ -90,7 +90,7 @@ export class EngineHost extends EventEmitter {
 
   /** Network counters of the live backend (zeros while stopped or reloading). */
   networkCounters(): NetworkCounters & { generation: number } {
-    const zero = { peers: 0, connections: 0, bytesIn: 0, bytesOut: 0 }
+    const zero = { peers: 0, connections: 0, bytesIn: 0, bytesOut: 0, reachable: null }
     if (!this.backend || this.status.phase !== 'ready') return { ...zero, generation: this.generation }
     try {
       return { ...this.backend.networkCounters(), generation: this.generation }

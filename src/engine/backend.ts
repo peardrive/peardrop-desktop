@@ -67,6 +67,8 @@ export interface NetworkCounters {
   /** Bytes received / sent since the backend started. */
   bytesIn: number
   bytesOut: number
+  /** Whether a DHT bootstrap server answers a ping; null until first checked. */
+  reachable: boolean | null
 }
 
 export interface BackendContext {

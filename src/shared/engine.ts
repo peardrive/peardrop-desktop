@@ -41,7 +41,21 @@ export interface NetworkStats {
   /** Bytes received / sent since the engine (re)started. */
   totalIn: number
   totalOut: number
+  /**
+   * Whether the DHT can be reached: false with no network or when no
+   * bootstrap server answers a ping; null until the first check.
+   */
+  reachable: boolean | null
   at: number
 }
 
-export const EMPTY_NETWORK_STATS: NetworkStats = { peers: 0, connections: 0, inbound: 0, outbound: 0, totalIn: 0, totalOut: 0, at: 0 }
+export const EMPTY_NETWORK_STATS: NetworkStats = {
+  peers: 0,
+  connections: 0,
+  inbound: 0,
+  outbound: 0,
+  totalIn: 0,
+  totalOut: 0,
+  reachable: null,
+  at: 0
+}

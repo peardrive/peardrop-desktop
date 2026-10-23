@@ -45,6 +45,7 @@ import { EngineError } from '../engine-errors'
 import type { Logger } from '../logger'
 import { downloadFromDrive } from './downloader'
 import { HyperdriveManager } from './manager'
+import { NetworkProbe } from './network-probe'
 import { LINK_SCHEME } from './share-link'
 import {
   DriveState as EngineDriveState,
@@ -114,6 +115,9 @@ export class HyperdriveBackend implements TransferBackend {
   /** driveId -> abort fn for the file currently streaming. */
   private readonly downloadAborters = new Map<string, () => void>()
 
+  /** Pings the bootstrap servers, for the "reachable" network state. */
+  private probe: NetworkProbe | null = null
+
   constructor(private readonly ctx: BackendContext) {
     this.log = ctx.log.child('hyperdrive')
     this.manager = this.createManager()
@@ -135,6 +139,10 @@ export class HyperdriveBackend implements TransferBackend {
       drivesDir: this.ctx.paths.drivesDir,
       bootstrap: this.ctx.network.bootstrap.length ? this.ctx.network.bootstrap : 'public DHT'
     })
+    // First, so the network state is known while drives are still resuming.
+    this.probe = new NetworkProbe({ bootstrap: this.ctx.network.bootstrap, log: this.log.child('probe') })
+    this.probe.start()
+
     // Listeners BEFORE init(): drives resume during init and their announce
     // events must not be lost.
     this.bindManagerEvents()
@@ -169,9 +177,13 @@ export class HyperdriveBackend implements TransferBackend {
     // are torn down at the same time, and both are awaited.
     // persistState:false — shutdown/reload must not demote drives to PAUSED,
     // so they auto-resume and re-announce on the next start.
+    const probe = this.probe
+    this.probe = null
+
     await Promise.all([
       this.manager.abortAllConnections({ force }, stepDone).catch(() => undefined),
-      this.manager.stopAll({ delete: false, persistState: opts.persistState ?? false, force }, stepDone)
+      this.manager.stopAll({ delete: false, persistState: opts.persistState ?? false, force }, stepDone),
+      probe?.stop()
     ])
     for (const [event, fn] of this.managerListeners) {
       this.manager.removeListener(event, fn)
@@ -809,7 +821,13 @@ export class HyperdriveBackend implements TransferBackend {
       }
     }
     this.sampledOnce = true
-    return { peers: peers.size, connections, bytesIn: this.bytesIn, bytesOut: this.bytesOut }
+    return {
+      peers: peers.size,
+      connections,
+      bytesIn: this.bytesIn,
+      bytesOut: this.bytesOut,
+      reachable: this.probe?.reachable ?? null
+    }
   }
 
   async pause(driveId: string) {

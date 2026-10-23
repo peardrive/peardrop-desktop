@@ -90,7 +90,16 @@ export function createMockClient(): PeardropApi {
 
   // Network panel: a gently varying load.
   const statsListeners = new Set<(s: NetworkStats) => void>()
-  let stats: NetworkStats = { peers: 3, connections: 4, inbound: 3.8 * 1024 * 1024, outbound: 1.2 * 1024 * 1024, totalIn: 0, totalOut: 0, at: now }
+  let stats: NetworkStats = {
+    peers: 3,
+    connections: 4,
+    inbound: 3.8 * 1024 * 1024,
+    outbound: 1.2 * 1024 * 1024,
+    totalIn: 0,
+    totalOut: 0,
+    reachable: true,
+    at: now
+  }
   setInterval(() => {
     const wobble = () => 0.8 + Math.random() * 0.4
     stats = { ...stats, inbound: Math.round(3.8 * 1024 * 1024 * wobble()), outbound: Math.round(1.2 * 1024 * 1024 * wobble()), at: Date.now() }

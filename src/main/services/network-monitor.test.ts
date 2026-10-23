@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { NetworkMonitor } from './network-monitor'
 
 function counters() {
-  const c = { peers: 2, connections: 3, bytesIn: 0, bytesOut: 0, generation: 1 }
+  const c = {
+    peers: 2,
+    connections: 3,
+    bytesIn: 0,
+    bytesOut: 0,
+    reachable: true as boolean | null,
+    generation: 1
+  }
   return { c, engine: { networkCounters: () => ({ ...c }) } }
 }
 
@@ -41,5 +48,22 @@ describe('NetworkMonitor', () => {
     m.sample(0)
     c.bytesIn += 20 // keep-alive chatter
     expect(m.sample(1000).inbound).toBe(0)
+  })
+
+  it('passes the DHT reachability through', () => {
+    const { c, engine } = counters()
+    const m = new NetworkMonitor(engine)
+    expect(m.sample(0).reachable).toBe(true)
+    c.reachable = false
+    expect(m.sample(1000).reachable).toBe(false)
+  })
+
+  it('is not reachable while the OS reports no network, whatever the last ping said', () => {
+    const { engine } = counters()
+    let online = true
+    const m = new NetworkMonitor(engine, () => online)
+    expect(m.sample(0).reachable).toBe(true)
+    online = false
+    expect(m.sample(1000).reachable).toBe(false)
   })
 })

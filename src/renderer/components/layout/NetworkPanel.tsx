@@ -9,6 +9,10 @@
  * in the folded sidebar the card shows the bars and the details open in a
  * popover beside it.
  *
+ * The bars follow networkLevel(): Not reachable (no network, or no DHT
+ * bootstrap server answers), Reachable (the DHT answers) and Connected (a
+ * peer connection is open).
+ *
  * There is no peer count: every drive runs its own swarm, so one remote
  * device shows up once per drive it is connected to and the total means
  * nothing.
@@ -22,31 +26,15 @@ import type { EngineStatus, NetworkStats } from '@shared/engine'
 import { useDismiss } from '../../hooks/useDismiss'
 import { cn } from '../../lib/cn'
 import { formatBytes, formatSpeed } from '../../lib/format'
+import { networkLevel, type NetworkLevel } from '../../lib/network-level'
 import { useNetworkStore } from '../../stores/network-store'
 import { useSettingsStore } from '../../stores/settings-store'
 import { VIcon } from '../ui/VIcon'
 
-type Level = { label: string; bars: 0 | 1 | 2 | 3; tone: 'online' | 'warning' | 'danger' | 'muted' }
-
-/** What the signal bars say. */
-export function connectionLevel(engine: EngineStatus | null, stats: NetworkStats): Level {
-  switch (engine?.phase) {
-    case 'ready':
-      return stats.connections > 0 ? { label: 'Connected', bars: 3, tone: 'online' } : { label: 'Online', bars: 2, tone: 'online' }
-    case 'starting':
-    case 'reloading':
-      return { label: 'Connecting', bars: 1, tone: 'warning' }
-    case 'error':
-      return { label: 'Offline', bars: 0, tone: 'danger' }
-    default:
-      return { label: engine ? 'Offline' : 'Starting', bars: 0, tone: 'muted' }
-  }
-}
-
 const TONE_TEXT = { online: 'text-online', warning: 'text-warning', danger: 'text-danger', muted: 'text-subtle' } as const
 
 /** Three rising bars; unlit bars stay faint. */
-function SignalBars({ level }: { level: Level }) {
+function SignalBars({ level }: { level: NetworkLevel }) {
   return (
     <span className={cn('flex h-4 shrink-0 items-end gap-0.5', TONE_TEXT[level.tone])} aria-hidden>
       {[6, 10, 14].map((h, i) => (
@@ -128,7 +116,7 @@ export function NetworkPanel({ collapsed }: { collapsed: boolean }) {
   const update = useSettingsStore((s) => s.updatePreferences)
   const [popover, setPopover] = useState(false)
   const buttonRef = useRef<HTMLButtonElement>(null)
-  const level = connectionLevel(engine, stats)
+  const level = networkLevel(engine, stats)
   const toggle = () => (collapsed ? setPopover((o) => !o) : void update({ layout: { networkDetails: !expanded } }))
   const title = `${level.label} · ↓ ${speedText(stats.inbound)} · ↑ ${speedText(stats.outbound)}`
 

@@ -50,6 +50,23 @@ declare module 'hyperdrive' {
   }
 }
 
+declare module 'hyperdht' {
+  export interface HyperDHTOptions {
+    /** Nodes to join through; an empty list joins nothing. */
+    bootstrap?: Array<{ host: string; port: number } | string>
+    ephemeral?: boolean
+  }
+
+  export default class HyperDHT {
+    /** The public bootstrap nodes, written "ip@hostname:port". */
+    static readonly BOOTSTRAP: string[]
+    constructor(opts?: HyperDHTOptions)
+    /** Resolves when the node at host:port answers. */
+    ping(node: { host: string; port: number }, opts?: { retry?: boolean }): Promise<unknown>
+    destroy(opts?: { force?: boolean }): Promise<void>
+  }
+}
+
 declare module 'hyperswarm' {
   import type { EventEmitter } from 'node:events'
   import type { Duplex } from 'node:stream'
