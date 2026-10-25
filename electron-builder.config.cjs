@@ -61,7 +61,15 @@ module.exports = {
     ],
     category: 'public.app-category.productivity',
     icon: identity.icon,
-    artifactName: '${productName}-${version}-mac-${arch}.${ext}'
+    artifactName: '${productName}-${version}-mac-${arch}.${ext}',
+    hardenedRuntime: true,
+    gatekeeperAssess: false,
+    entitlements: 'assets/entitlements.mac.plist',
+    entitlementsInherit: 'assets/entitlements.mac.plist',
+    extendInfo: {
+      NSCameraUsageDescription: 'PearDrop uses the camera to scan share QR codes.'
+    },
+    notarize: true
   },
   linux: {
     target: ['AppImage', 'deb'],
