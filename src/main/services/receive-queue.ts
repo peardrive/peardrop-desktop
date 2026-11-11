@@ -44,6 +44,8 @@ const OWNED_CHECK_MS = 45_000
 const PROGRESS_FRESH_MS = 30_000
 /** At most this many DHT lookups at once. */
 const MAX_PARALLEL_SEARCHES = 3
+/** A sender reconnecting cuts a failed download's backoff down to this. */
+const PEER_BACK_RETRY_MS = 2_000
 
 type QueueEngine = Pick<EngineHost, 'withBackend' | 'publish' | 'on'>
 
@@ -321,6 +323,15 @@ export class ReceiveQueue extends EventEmitter {
       case 'transfer-progress':
         if (e.peerId === 'self') this.lastProgress.set(e.driveId, Date.now())
         return
+      case 'download-peer-connected': {
+        // The sender is back: a download that failed on a stall (and is
+        // sitting out its backoff) can go again now.
+        const task = this.byDrive(e.driveId)
+        if (task && task.phase === 'downloading' && !this.downloading.has(e.driveId) && this.timers.has(task.id)) {
+          this.schedule(task.id, PEER_BACK_RETRY_MS)
+        }
+        return
+      }
       case 'files-downloaded':
       case 'drive-removed': {
         const task = this.byDrive(e.driveId)

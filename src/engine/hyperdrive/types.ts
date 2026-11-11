@@ -214,6 +214,7 @@ export interface ManagerEvents {
     totalBytes: number
     files: RemoteFile[]
   }
+  'download-peer-connected': { driveId: string }
   'download-peer-disconnected': { driveId: string }
   'connection-status': { driveId: string; status: 'searching'; peerConnected: boolean }
 }

@@ -163,6 +163,8 @@ export type TransferEvent =
       partial: boolean
       failedCount: number
     }
+  /** A sender (or another seeder) connected to one of our downloads. */
+  | { type: 'download-peer-connected'; driveId: string }
   | { type: 'download-peer-disconnected'; driveId: string }
   /** A download started by the receive queue failed; `willRetry` = the queue keeps trying. */
   | { type: 'download-failed'; driveId: string; error: string; willRetry: boolean }

@@ -267,6 +267,8 @@ function searchForSender(
     console.log('[HyperdriveManager] Connected to peer for download', { driveId, livePeers })
 
     opts.store.replicate(socket)
+    // Lets a download that failed on a stall retry now, not after its backoff.
+    ctx.emitEvent('download-peer-connected', { driveId })
 
     socket.on('error', (err: Error) => {
       console.log('[HyperdriveManager] Download socket error', { driveId, error: err.message })
