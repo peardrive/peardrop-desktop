@@ -429,6 +429,8 @@ export class HyperdriveBackend implements TransferBackend {
   ) {
     const info = this.downloadRoots.get(driveId)
     this.downloadRoots.delete(driveId)
+    // Cancel deletes the partials, so the notes pointing at them are stale.
+    await this.manager.clearPartialPaths(driveId).catch(() => undefined)
     // A just-destroyed write stream can hold the file open for a moment on
     // Windows (EBUSY/EPERM). Retry briefly instead of giving up.
     const rmWithRetry = async (target: string, recursive = false) => {
@@ -602,8 +604,17 @@ export class HyperdriveBackend implements TransferBackend {
           if (base) resumePaths['/' + base.replace(/^\//, '')] = f.path
         }
       }
+      // Files that COMPLETED give their paths above. A download that was cut
+      // off has no completed files at all, so without these the retry had no
+      // resume path and getUniqueFilePath invented "movie (1).mkv" each time.
+      for (const [key, p] of Object.entries(priorEntry?.partialPaths || {})) {
+        if (p && !resumePaths[key]) resumePaths[key] = p
+      }
+
       let resumeRoot: string | null = null
-      const firstPriorPath = (priorEntry?.files || []).find((f) => f && f.path)?.path
+      const firstPriorPath =
+        (priorEntry?.files || []).find((f) => f && f.path)?.path ??
+        Object.values(priorEntry?.partialPaths || {})[0]
       if (firstPriorPath) {
         const dir = path.dirname(firstPriorPath)
         if (path.resolve(dir) !== path.resolve(downloadPath)) resumeRoot = dir
@@ -649,6 +660,7 @@ export class HyperdriveBackend implements TransferBackend {
       // Zero files retrieved is never a success, however many failed.
       if (gotCount === 0) {
         this.log.warn('Download failed: no files retrieved', { driveId, failed: failedCount })
+        await this.rememberPartials(driveId, result.failed)
         this.clearDownloadState(driveId)
         return {
           success: false,
@@ -682,6 +694,14 @@ export class HyperdriveBackend implements TransferBackend {
         state: EngineDriveState.ACTIVE,
         isUpload: false
       })
+      // Completed files are in the entry now; a partial from a file that did
+      // NOT finish still needs its note, or that one file duplicates on retry.
+      if (failedCount > 0) {
+        await this.rememberPartials(driveId, result.failed)
+      } else {
+        await this.manager.clearPartialPaths(driveId)
+      }
+
       session.isSeeding = true
       session.driveEntryId = entry.driveId
       this.log.info('Download complete, now seeding', { driveId, files: gotCount, failed: failedCount })
@@ -723,6 +743,25 @@ export class HyperdriveBackend implements TransferBackend {
         error: (error as Error).message,
         ...(error instanceof EngineError ? { errorDetail: error.toJSON() } : {})
       }
+    }
+  }
+
+  /**
+   * Note where an interrupted attempt left each partial, so the next one
+   * writes to the same file instead of a new one. Failures with no path
+   * (nothing was ever opened) are skipped.
+   */
+  private async rememberPartials(driveId: string, failed: Array<{ key: string; path?: string }> | undefined) {
+    const paths: Record<string, string> = {}
+    for (const f of failed || []) {
+      if (f?.key && f.path) paths[f.key] = f.path
+    }
+    if (!Object.keys(paths).length) return
+    try {
+      await this.manager.recordPartialPaths(driveId, paths)
+    } catch (err) {
+      // Losing the note costs a duplicate file, never the download itself.
+      this.log.warn('Could not record partial download paths', (err as Error).message)
     }
   }
 

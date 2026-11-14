@@ -14,6 +14,7 @@ import { Switch } from '../../components/ui/Switch'
 import { NetworkSettings } from './NetworkSettings'
 import { PageHeader, SettingsRow, SettingsSection } from './SettingsLayout'
 import { ThemePicker } from './ThemePicker'
+import { UiScalePicker } from './UiScalePicker'
 
 function PathValue({ path }: { path: string | undefined }) {
   return <span className="select-text break-all font-mono text-[10px]">{path ?? '—'}</span>
@@ -57,6 +58,12 @@ export default function SettingsPage() {
         </div>
 
         <SettingsSection title="Appearance">
+          <SettingsRow
+            icon="monitor"
+            label="Font size"
+            description="Scales the whole interface, not just text. Applies instantly."
+            control={<UiScalePicker />}
+          />
           <SettingsRow icon="palette" label="Theme" description="Applies to every screen instantly. Hover a theme to read about it." stacked control={<ThemePicker />} />
         </SettingsSection>
 

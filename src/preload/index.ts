@@ -63,7 +63,8 @@ const api: PeardropApi = {
     state: () => invoke('window:state'),
     act: (action) => invoke('window:action', action),
     onState: (cb) => subscribe('window:state', cb),
-    setChrome: (chrome) => invoke('window:set-chrome', chrome)
+    setChrome: (chrome) => invoke('window:set-chrome', chrome),
+    setZoom: (factor) => invoke('window:set-zoom', factor)
   },
   qr: { generate: (text) => invoke('qr:generate', text) },
   app: {

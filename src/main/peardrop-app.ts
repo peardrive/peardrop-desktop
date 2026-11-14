@@ -20,7 +20,7 @@
  */
 import { app, BrowserWindow, dialog, nativeTheme, net } from 'electron'
 import type { AppCommand, IpcPushChannel, IpcPushMap } from '@shared/ipc'
-import { themeScheme, type Preferences } from '@shared/preferences'
+import { themeScheme, UI_SCALE_FACTORS, type Preferences } from '@shared/preferences'
 import type { StopProgress } from '@engine/backend'
 import { LEGACY_ROOT, type PeardropPaths } from '@engine/paths'
 import { identity } from './app-identity'
@@ -36,7 +36,7 @@ import { ReceiveQueue } from './services/receive-queue'
 import { LibraryStore } from './stores/library-store'
 import { PreferencesStore } from './stores/preferences-store'
 import { AppTray, applyLoginItem, launchedHidden } from './tray'
-import { createMainWindow, currentWindowChrome } from './window'
+import { applyZoom, createMainWindow, currentWindowChrome } from './window'
 
 export interface PearDropAppOptions {
   runtime: RuntimeConfig
@@ -297,6 +297,13 @@ export class PearDropApp {
       backgroundColor: windowBackground(),
       hideOnClose: () => this.shouldHideOnClose(),
       onHiddenToTray: () => this.showTrayNoticeOnce()
+    })
+
+    // UI scale. Electron resets the zoom factor on every navigation, so this
+    // is reapplied after each load rather than set once at creation.
+    win.webContents.on('did-finish-load', () => {
+      const scale = this.preferences?.get().appearance.uiScale ?? 'default'
+      applyZoom(win, UI_SCALE_FACTORS[scale])
     })
 
     // Forget the window once it is really closed; showWindow() makes a new one.

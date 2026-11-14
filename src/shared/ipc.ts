@@ -103,6 +103,7 @@ export interface IpcInvokeMap {
   'window:state': { args: []; result: WindowState }
   'window:action': { args: [WindowAction]; result: WindowState }
   'window:set-chrome': { args: [WindowChrome]; result: void }
+  'window:set-zoom': { args: [number]; result: void }
   'logs:path': { args: []; result: string }
   'logs:reveal': { args: []; result: SimpleResult }
   'logs:tail': { args: [lines?: number]; result: LogTailResult }
@@ -187,6 +188,8 @@ export interface PeardropApi {
     onState(cb: (state: WindowState) => void): Unsubscribe
     /** Paint the window chrome (Windows title bar, window background) in the active theme. */
     setChrome(chrome: WindowChrome): Promise<void>
+    /** Renderer zoom factor — the UI-scale preference, applied live. */
+    setZoom(factor: number): Promise<void>
   }
   qr: { generate(text: string): Promise<string> }
   app: {

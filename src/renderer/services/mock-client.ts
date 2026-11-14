@@ -257,7 +257,8 @@ export function createMockClient(): PeardropApi {
       state: async () => ({ maximized: false, fullScreen: false, focused: true }),
       act: async () => ({ maximized: false, fullScreen: false, focused: true }),
       onState: () => () => undefined,
-      setChrome: async () => undefined
+      setChrome: async () => undefined,
+      setZoom: async () => undefined
     },
     network: {
       stats: async () => stats,

@@ -7,7 +7,8 @@ import { app, dialog, shell, type BrowserWindow } from 'electron'
 import QRCode from 'qrcode'
 import type { AppInfo } from '@shared/app-info'
 import type { WindowState } from '@shared/ipc'
-import { applyWindowChrome, resolveWindowFrame } from '../window'
+import { UI_SCALE_FACTORS } from '@shared/preferences'
+import { applyWindowChrome, applyZoom, resolveWindowFrame } from '../window'
 import type { ShareResult } from '@shared/transfer'
 import type { PeardropPaths } from '@engine/paths'
 import { identity, iconDataUrl } from '../app-identity'
@@ -145,7 +146,17 @@ export function registerIpc(d: IpcDeps): void {
 
   // ── settings & library ───────────────────────────────────────────────
   handle('settings:get', () => d.preferences.get())
-  handle('settings:update', (patch) => d.preferences.patch(patch), log)
+  // Zoom is applied here rather than from the renderer so it survives a
+  // reload and is in place before the first paint of the new preferences.
+  handle(
+    'settings:update',
+    async (patch) => {
+      const next = await d.preferences.patch(patch)
+      applyZoom(d.getWindow(), UI_SCALE_FACTORS[next.appearance.uiScale])
+      return next
+    },
+    log
+  )
   handle('library:get', () => d.library.get())
   handle('library:set-favorite', (id, fav) => d.library.setFavorite(id, fav))
   handle('library:set-alias', (id, alias) => d.library.setAlias(id, alias))
@@ -162,6 +173,9 @@ export function registerIpc(d: IpcDeps): void {
   handle('window:set-chrome', (chrome) => {
     const win = d.getWindow()
     if (win) applyWindowChrome(win, chrome)
+  })
+  handle('window:set-zoom', (factor) => {
+    applyZoom(d.getWindow(), factor)
   })
   handle('window:action', (action) => {
     const win = d.getWindow()

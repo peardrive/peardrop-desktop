@@ -1,0 +1,92 @@
+# Build installers for Windows and Linux and attach them to a GitHub Release.
+#
+# Each platform builds on its own runner, because electron-builder can only
+# produce Linux targets on Linux/macOS and these are native-dependency builds
+# (corestore, hyperdht and friends) — cross-compiling them is not worth it.
+#
+# macOS is deliberately absent: it needs a real Mac runner, and the mac block
+# in electron-builder.config.cjs sets notarize: true, which fails the job
+# without a paid Apple Developer account. Add a `macos-latest` entry and the
+# Apple secrets when that account exists.
+#
+# To cut a release:
+#   npm version minor   # bumps package.json and tags
+#   git push --follow-tags
+# Or run it by hand from the Actions tab to get artifacts without a release.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write # needed to create the release and upload assets
+
+jobs:
+  build:
+    strategy:
+      # One platform failing should still leave the other's installers.
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: build:win
+            artifacts: |
+              dist/*.exe
+              dist/*.blockmap
+              dist/latest.yml
+          - os: ubuntu-latest
+            script: build:linux
+            artifacts: |
+              dist/*.AppImage
+              dist/*.deb
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # postinstall downloads the Electron binary; npm ci keeps it reproducible.
+      - name: Install
+        run: npm ci
+
+      # Build what is verified, not what merely compiles.
+      - name: Typecheck and test
+        run: npm run check
+
+      - name: Build installers
+        run: npm run ${{ matrix.script }}
+        env:
+          # Nothing is code-signed. Without this electron-builder can go
+          # looking for a certificate and fail instead of skipping.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}
+          path: ${{ matrix.artifacts }}
+          if-no-files-found: error
+
+  release:
+    # Only a tag publishes; a manual run just leaves artifacts on the run.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true # check the assets, then publish by hand
+          generate_release_notes: true
+          files: artifacts/**/*

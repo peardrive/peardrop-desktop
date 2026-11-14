@@ -319,6 +319,16 @@ export class HyperdriveManager extends EventEmitter implements EngineContext {
     return this.store.add(input)
   }
 
+  /** Remember where an interrupted download left partials, for the retry. */
+  recordPartialPaths(driveId: string, paths: Record<string, string>): Promise<boolean> {
+    return this.store.recordPartialPaths(driveId, paths)
+  }
+
+  /** Drop those notes once the download has finished. */
+  clearPartialPaths(driveId: string): Promise<void> {
+    return this.store.clearPartialPaths(driveId)
+  }
+
   removeDriveEntry(driveId: string, opts: RemoveDriveEntryOptions = {}): Promise<boolean> {
     return this.store.remove(driveId, opts)
   }

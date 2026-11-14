@@ -52,6 +52,14 @@ export interface ManifestDriveEntry {
   createdAt?: number
   isUpload?: boolean
   error?: string
+  /**
+   * Drive key → absolute path of a partial left by an interrupted download.
+   *
+   * Deliberately NOT in `files`: those are files the user actually has and
+   * the UI lists them. A partial is only a note to the next attempt about
+   * where to carry on. Cleared once the download completes.
+   */
+  partialPaths?: Record<string, string>
   ttlMs?: number
   expiresAt?: number | null
   pausedAt?: number

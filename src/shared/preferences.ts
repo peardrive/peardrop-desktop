@@ -27,6 +27,23 @@ export function themeScheme(pref: ThemePreference): 'dark' | 'light' | 'system' 
   return LIGHT_THEME_IDS.includes(pref) ? 'light' : 'dark'
 }
 
+/**
+ * UI scale steps. Implemented as a renderer zoom factor, so text, spacing and
+ * icons grow together — the alternative, scaling text alone, would need every
+ * hard-coded `text-[12px]` in the renderer rewritten and would leave anything
+ * missed sitting at the old size next to scaled text.
+ */
+export const UI_SCALES = ['small', 'default', 'large', 'xlarge'] as const
+export type UiScale = (typeof UI_SCALES)[number]
+
+/** Zoom factor for each step. 1 is the designed size. */
+export const UI_SCALE_FACTORS: Record<UiScale, number> = {
+  small: 0.9,
+  default: 1,
+  large: 1.1,
+  xlarge: 1.25
+}
+
 export type ListViewMode = 'grid' | 'table'
 export type SortField = 'recent' | 'status' | 'size' | 'name' | 'peers' | 'filetype'
 export type SortDirection = 'asc' | 'desc'
@@ -35,6 +52,8 @@ export interface Preferences {
   version: 1
   appearance: {
     theme: ThemePreference
+    /** Zoom step for the whole interface. */
+    uiScale: UiScale
   }
   network: {
     /** Custom DHT bootstrap address(es), "host:port[, host:port]". Empty = public DHT. */
@@ -67,7 +86,7 @@ export interface Preferences {
 
 export const DEFAULT_PREFERENCES: Preferences = {
   version: 1,
-  appearance: { theme: 'void' },
+  appearance: { theme: 'void', uiScale: 'default' },
   network: { bootstrap: '' },
   list: { view: 'grid', sortField: 'recent', sortDirection: 'desc' },
   diagnostics: { debug: false },
@@ -92,7 +111,8 @@ export function sanitizePreferences(input: unknown): Preferences {
   return {
     version: 1,
     appearance: {
-      theme: pick(LEGACY_THEME_IDS[src.appearance?.theme] ?? src.appearance?.theme, [...THEME_IDS, 'system'] as const, d.appearance.theme)
+      theme: pick(LEGACY_THEME_IDS[src.appearance?.theme] ?? src.appearance?.theme, [...THEME_IDS, 'system'] as const, d.appearance.theme),
+      uiScale: pick(src.appearance?.uiScale, UI_SCALES, d.appearance.uiScale)
     },
     network: {
       bootstrap: typeof src.network?.bootstrap === 'string' ? src.network.bootstrap.trim() : d.network.bootstrap

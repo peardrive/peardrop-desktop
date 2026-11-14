@@ -257,6 +257,33 @@ export class ManifestStore {
    * Mark a drive as paused. The caller stops the network side with
    * stopDrive, which persists PAUSED itself; this keeps the two consistent.
    */
+  /**
+   * Remember where an interrupted download left its partials, so the next
+   * attempt resumes into them instead of creating "movie (1).mkv" alongside.
+   *
+   * Narrow by design: add() rebuilds the whole entry, which would wipe the
+   * name and state of a drive part-way through its first download. This
+   * touches one field. No-op when the entry does not exist yet.
+   */
+  async recordPartialPaths(driveId: string, paths: Record<string, string>): Promise<boolean> {
+    const entry = this.drives[driveId]
+    const keys = Object.keys(paths)
+    if (!entry || !keys.length) return false
+
+    entry.partialPaths = { ...entry.partialPaths, ...paths }
+    await this.save()
+    console.log('[HyperdriveManager] Recorded partial download paths', { id: driveId, files: keys.length })
+    return true
+  }
+
+  /** Drop the partial notes once a download has finished. */
+  async clearPartialPaths(driveId: string): Promise<void> {
+    const entry = this.drives[driveId]
+    if (!entry?.partialPaths) return
+    delete entry.partialPaths
+    await this.save()
+  }
+
   async pause(driveId: string): Promise<ManifestDriveEntry | null> {
     const entry = this.drives[driveId]
     if (!entry) {
