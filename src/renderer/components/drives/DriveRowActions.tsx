@@ -5,6 +5,7 @@
  * @example <DriveRowActions drive={drive} onAction={(a) => runRowAction(a, drive)} />
  */
 import type { MouseEvent } from 'react'
+import { cn } from '../../lib/cn'
 import { rowActions, type DriveView, type RowAction } from '../../lib/drive-model'
 import { Button } from '../ui/Button'
 import { IconButton } from '../ui/IconButton'
@@ -12,17 +13,21 @@ import { IconButton } from '../ui/IconButton'
 export interface DriveRowActionsProps {
   drive: DriveView
   onAction: (action: RowAction) => void
+  /** Actions not to draw here (the expanded and grid layouts open by click, so they skip "Open"). */
+  exclude?: RowAction[]
+  className?: string
 }
 
-export function DriveRowActions({ drive, onAction }: DriveRowActionsProps) {
-  const actions = rowActions(drive)
+export function DriveRowActions({ drive, onAction, exclude, className }: DriveRowActionsProps) {
+  const actions = rowActions(drive).filter((a) => !exclude?.includes(a))
+  if (actions.length === 0) return null
   const partial = drive.kind === 'download' && drive.status === 'inactive'
   const stop = (fn: () => void) => (e: MouseEvent) => {
     e.stopPropagation()
     fn()
   }
   return (
-    <div className="flex shrink-0 items-center gap-1.5">
+    <div className={cn('flex shrink-0 items-center gap-1.5', className)}>
       {actions.map((a) => {
         switch (a) {
           case 'resume':

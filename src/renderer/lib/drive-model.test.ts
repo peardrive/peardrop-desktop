@@ -70,7 +70,8 @@ describe('titles', () => {
   it('alias wins, and the type prefix ignores it', () => {
     const d = view({ name: 'photos.zip', files: [{ name: 'photos.zip', size: 1 }] })
     expect(displayTitle(d, { d: 'Summer' })).toBe('Summer')
-    expect(typePrefix(d)).toBe('Archive')
+    // The line says one state; the kind of file is the picture's job.
+    expect(typePrefix(d)).toBeNull()
   })
 })
 
@@ -78,8 +79,34 @@ describe('status presentation', () => {
   it('distinguishes Active from actually Sharing', () => {
     expect(statusPresentation(view()).label).toBe('Active')
     expect(statusPresentation(view({ speed: 100 }))).toMatchObject({ label: 'Sharing', tone: 'warning' })
-    expect(statusPresentation(view({ status: 'downloading', progress: 0.42 })).label).toBe('Downloading (42%)')
-    expect(statusPresentation(view({ status: 'interrupted', progress: 0.3 })).label).toBe('Disconnected at 30%')
+    expect(statusPresentation(view({ status: 'sharing', progress: 0.12 })).label).toBe('Sharing 12%')
+  })
+
+  it('says the same words as the phone app, one state at a time', () => {
+    expect(statusPresentation(view({ status: 'downloading', progress: 0.42 }))).toMatchObject({ label: 'Downloading 42%', tone: 'warning', moving: true })
+    // Finished and here: Active, in green, whether or not it is being passed on.
+    expect(statusPresentation(view({ status: 'complete', kind: 'download' }))).toMatchObject({ label: 'Active', tone: 'success' })
+    // The queue is looking for the sender and carries on by itself.
+    expect(statusPresentation(view({ status: 'connecting', progress: 0.3 }))).toMatchObject({ label: 'Waiting 30%', tone: 'warning', moving: false })
+    expect(statusPresentation(view({ status: 'connecting' })).label).toBe('Waiting')
+    // Nothing carries an interrupted download on until Resume is pressed.
+    expect(statusPresentation(view({ status: 'interrupted', progress: 0.3 }))).toMatchObject({ label: 'Paused 30%', tone: 'warning' })
+    expect(statusPresentation(view({ status: 'initiating' })).label).toBe('Starting')
+    const queued = { phase: 'waiting' as const, attempts: 2, nextAttemptAt: null, lastError: null }
+    expect(statusPresentation(view({ status: 'connecting', receive: queued }))).toMatchObject({ label: 'Waiting', tone: 'warning', moving: false })
+  })
+
+  it('keeps grey for switched off and red for what needs the person', () => {
+    expect(statusPresentation(view({ status: 'inactive' }))).toMatchObject({ label: 'Inactive', tone: 'muted' })
+    for (const [status, label] of [['unreachable', 'Not reachable'], ['lost', 'Share lost'], ['missing', 'Files removed'], ['error', 'Failed']] as const) {
+      expect(statusPresentation(view({ status }))).toMatchObject({ label, tone: 'danger' })
+    }
+  })
+
+  it('never chains two states or brackets a number', () => {
+    for (const status of ['sharing', 'initiating', 'unreachable', 'downloading', 'connecting', 'interrupted', 'complete', 'inactive', 'error', 'missing', 'lost'] as const) {
+      expect(statusPresentation(view({ status, progress: 0.5 })).label).not.toMatch(/[·•|(]/)
+    }
   })
 })
 

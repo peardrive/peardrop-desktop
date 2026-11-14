@@ -27,7 +27,9 @@
     "build:dir": "npm run build && electron-builder --config electron-builder.config.cjs --dir",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test",
+    "pearkit:sync": "node scripts/pearkit-sync.mjs",
+    "pearkit:check": "node scripts/pearkit-sync.mjs --check"
   },
   "dependencies": {
     "bs58": "^6.0.0",
@@ -40,29 +42,35 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
-    "@types/node": "^20.17.10",
+    "@types/node": "^22.0.0",
     "@types/qrcode": "^1.5.5",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "@vitejs/plugin-react": "^4.3.4",
+    "@vitejs/plugin-react": "^5.2.0",
     "autoprefixer": "^10.4.20",
     "clsx": "^2.1.1",
     "cross-env": "^7.0.3",
-    "electron": "^28.3.3",
-    "electron-builder": "^25.1.8",
-    "electron-vite": "^2.3.0",
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0",
+    "electron-vite": "^6.0.0",
     "postcss": "^8.4.49",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tailwind-merge": "^2.5.5",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.6.3",
-    "vite": "^5.4.11",
-    "vitest": "^2.1.8",
+    "vite": "^7.3.7",
+    "vitest": "^5.1.0",
     "zustand": "^5.0.2"
   },
   "allowScripts": {
-    "electron@28.3.3": true,
-    "esbuild@0.21.5": true
+    "electron": true,
+    "esbuild": true,
+    "fsevents": true,
+    "electron-winstaller": true
+  },
+  "overrides": {
+    "global-agent": "^4.1.6",
+    "minimatch@>=7.0.0 <11.0.1": "^11.0.4"
   }
 }

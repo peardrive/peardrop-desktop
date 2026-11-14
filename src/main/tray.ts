@@ -87,7 +87,11 @@ export class AppTray {
 export function applyLoginItem(openAtLogin: boolean, log: Logger): void {
   if (!app.isPackaged) return
   try {
-    app.setLoginItemSettings({ openAtLogin, openAsHidden: true, args: ['--hidden'] })
+    // Only touch the OS when the state differs: on macOS (SMAppService) unregistering an app that was never
+    // registered logs "Unable to set login item: Operation not permitted" on every launch.
+    if (app.getLoginItemSettings().openAtLogin === openAtLogin) return
+    // `args` reaches Windows; macOS has no "open hidden" any more, so launchedHidden() checks wasOpenedAtLogin.
+    app.setLoginItemSettings({ openAtLogin, args: ['--hidden'] })
   } catch (err) {
     log.warn('Could not update login item', (err as Error).message)
   }
@@ -97,7 +101,7 @@ export function applyLoginItem(openAtLogin: boolean, log: Logger): void {
 export function launchedHidden(): boolean {
   if (process.argv.includes('--hidden')) return true
   try {
-    return process.platform === 'darwin' && app.getLoginItemSettings().wasOpenedAsHidden === true
+    return process.platform === 'darwin' && app.getLoginItemSettings().wasOpenedAtLogin === true
   } catch {
     return false
   }

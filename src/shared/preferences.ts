@@ -7,6 +7,8 @@
  * put the app into an invalid state.
  */
 
+import { UI_SCALE_DEFAULT_STEP, UI_SCALE_MAX_STEP } from './ui-scale'
+
 /** Every theme, in picker order (palettes live in renderer/theme/themes.ts). */
 export const THEME_IDS = ['void', 'pear', 'ocean', 'paper', 'ember', 'forest', 'lavender', 'rose', 'slate', 'cream', 'synth'] as const
 export type ThemeId = (typeof THEME_IDS)[number]
@@ -27,7 +29,12 @@ export function themeScheme(pref: ThemePreference): 'dark' | 'light' | 'system' 
   return LIGHT_THEME_IDS.includes(pref) ? 'light' : 'dark'
 }
 
-export type ListViewMode = 'grid' | 'table'
+/** list = compact rows · expanded = two columns of wide cards · grid = thumbnail tiles. */
+export type ListViewMode = 'list' | 'expanded' | 'grid'
+/** Tile width in the grid layout. */
+export type TileSize = 'small' | 'medium' | 'large'
+/** Layout ids from before the three-layout design (older preferences.json files). */
+const LEGACY_VIEW_IDS: Record<string, ListViewMode> = { table: 'list' }
 export type SortField = 'recent' | 'status' | 'size' | 'name' | 'peers' | 'filetype'
 export type SortDirection = 'asc' | 'desc'
 
@@ -35,6 +42,8 @@ export interface Preferences {
   version: 1
   appearance: {
     theme: ThemePreference
+    /** Interface size step, 0–20 (see shared/ui-scale.ts). */
+    uiScale: number
   }
   network: {
     /** Custom DHT bootstrap address(es), "host:port[, host:port]". Empty = public DHT. */
@@ -42,6 +51,7 @@ export interface Preferences {
   }
   list: {
     view: ListViewMode
+    tileSize: TileSize
     sortField: SortField
     sortDirection: SortDirection
   }
@@ -54,6 +64,8 @@ export interface Preferences {
     sidebarCollapsed: boolean
     /** The network panel at the bottom of the sidebar shows peers and speeds. */
     networkDetails: boolean
+    /** Width of the open sidebar in px (dragged with the divider at its right edge). */
+    sidebarWidth: number
   }
   background: {
     /** Closing the window keeps PearDrop running in the tray / menu bar. */
@@ -67,11 +79,11 @@ export interface Preferences {
 
 export const DEFAULT_PREFERENCES: Preferences = {
   version: 1,
-  appearance: { theme: 'void' },
+  appearance: { theme: 'void', uiScale: UI_SCALE_DEFAULT_STEP },
   network: { bootstrap: '' },
-  list: { view: 'grid', sortField: 'recent', sortDirection: 'desc' },
+  list: { view: 'list', tileSize: 'medium', sortField: 'recent', sortDirection: 'desc' },
   diagnostics: { debug: false },
-  layout: { sidebarCollapsed: false, networkDetails: false },
+  layout: { sidebarCollapsed: false, networkDetails: false, sidebarWidth: 160 },
   background: { closeToTray: true, openAtLogin: false, trayNoticeShown: false }
 }
 
@@ -81,6 +93,15 @@ export type PreferencesPatch = {
 }
 
 const bool = (value: unknown, fallback: boolean): boolean => (typeof value === 'boolean' ? value : fallback)
+
+/** Open sidebar width range in px; 160 is the Figma width. */
+export const SIDEBAR_WIDTH = { min: 140, default: 160, max: 320 } as const
+
+const num = (value: unknown, fallback: number, min: number, max: number, round = false): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  const n = Math.min(max, Math.max(min, value))
+  return round ? Math.round(n) : n
+}
 
 const pick = <T extends string>(value: unknown, allowed: readonly T[], fallback: T): T =>
   typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : fallback
@@ -92,13 +113,15 @@ export function sanitizePreferences(input: unknown): Preferences {
   return {
     version: 1,
     appearance: {
-      theme: pick(LEGACY_THEME_IDS[src.appearance?.theme] ?? src.appearance?.theme, [...THEME_IDS, 'system'] as const, d.appearance.theme)
+      theme: pick(LEGACY_THEME_IDS[src.appearance?.theme] ?? src.appearance?.theme, [...THEME_IDS, 'system'] as const, d.appearance.theme),
+      uiScale: num(src.appearance?.uiScale, d.appearance.uiScale, 0, UI_SCALE_MAX_STEP, true)
     },
     network: {
       bootstrap: typeof src.network?.bootstrap === 'string' ? src.network.bootstrap.trim() : d.network.bootstrap
     },
     list: {
-      view: pick(src.list?.view, ['grid', 'table'] as const, d.list.view),
+      view: pick(LEGACY_VIEW_IDS[src.list?.view] ?? src.list?.view, ['list', 'expanded', 'grid'] as const, d.list.view),
+      tileSize: pick(src.list?.tileSize, ['small', 'medium', 'large'] as const, d.list.tileSize),
       sortField: pick(src.list?.sortField, ['recent', 'status', 'size', 'name', 'peers', 'filetype'] as const, d.list.sortField),
       sortDirection: pick(src.list?.sortDirection, ['asc', 'desc'] as const, d.list.sortDirection)
     },
@@ -107,7 +130,8 @@ export function sanitizePreferences(input: unknown): Preferences {
     },
     layout: {
       sidebarCollapsed: bool(src.layout?.sidebarCollapsed, d.layout.sidebarCollapsed),
-      networkDetails: bool(src.layout?.networkDetails, d.layout.networkDetails)
+      networkDetails: bool(src.layout?.networkDetails, d.layout.networkDetails),
+      sidebarWidth: num(src.layout?.sidebarWidth, d.layout.sidebarWidth, SIDEBAR_WIDTH.min, SIDEBAR_WIDTH.max, true)
     },
     background: {
       closeToTray: bool(src.background?.closeToTray, d.background.closeToTray),

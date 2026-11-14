@@ -1,9 +1,9 @@
 /**
  * ListToolbar — the header above the list (Figma "List section"):
  *
- *   Files                         [≡ | ⊞]  [⏷ Filter]  [⇣ Recent]  [⋯]
+ *   Files                    [≡ | ▤ | ⊞]  [⏷ Filter]  [⇣ Recent]  [⋯]
  *
- * Title of the active sidebar list, the layout switch (list / grid), the
+ * Title of the active sidebar list, the layout switch (list / expanded / grid), the
  * status filter, the sort menu (its label is the active sort field) and the
  * list options. On a narrow window the buttons drop their labels.
  *
@@ -13,6 +13,7 @@ import { confirmClearCompleted, resumeAll, stopAllSharing } from '../../controll
 import type { SortField } from '../../lib/drive-model'
 import { cn } from '../../lib/cn'
 import { api } from '../../services/client'
+import type { ListViewMode } from '@shared/preferences'
 import { useSettingsStore } from '../../stores/settings-store'
 import { useUiStore, type ListTab, type StatusFilter } from '../../stores/ui-store'
 import { Menu, useMenu, type MenuEntry } from '../ui/Menu'
@@ -35,7 +36,7 @@ const chipButton =
 function LayoutSwitch() {
   const view = useSettingsStore((s) => s.preferences.list.view)
   const update = useSettingsStore((s) => s.updatePreferences)
-  const option = (value: 'table' | 'grid', icon: VIconName, label: string) => {
+  const option = (value: ListViewMode, icon: VIconName, label: string) => {
     const active = view === value
     return (
       <button
@@ -53,8 +54,9 @@ function LayoutSwitch() {
   }
   return (
     <div role="radiogroup" aria-label="Layout" className="chip flex shrink-0 items-center gap-1 rounded-lg p-1">
-      {option('table', 'row-vertical', 'List')}
-      {option('grid', 'grid-2', 'Grid')}
+      {option('list', 'view-list', 'List')}
+      {option('expanded', 'view-expanded', 'Expanded')}
+      {option('grid', 'view-grid', 'Grid')}
     </div>
   )
 }

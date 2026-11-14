@@ -60,7 +60,8 @@ module.exports = {
       { target: 'zip', arch: ['x64', 'arm64'] }
     ],
     category: 'public.app-category.productivity',
-    icon: identity.icon,
+    // Same art inside Apple's 824/1024 icon grid, so it sits level with other Dock icons.
+    icon: identity.macIcon,
     artifactName: '${productName}-${version}-mac-${arch}.${ext}',
     hardenedRuntime: true,
     gatekeeperAssess: false,

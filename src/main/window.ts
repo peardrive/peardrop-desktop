@@ -54,6 +54,8 @@ export interface CreateWindowOptions {
   log: Logger
   /** Window fill behind the page (matches the theme so a resize never flashes). */
   backgroundColor?: string
+  /** Page zoom to open at (the interface size preference), so the first paint is already the right size. */
+  zoomFactor?: number
   /** Create without showing (launched hidden into the tray). */
   startHidden?: boolean
   /** Asked on every close: true keeps the app alive and only hides the window. */
@@ -152,6 +154,7 @@ export function createMainWindow(opts: CreateWindowOptions): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      zoomFactor: opts.zoomFactor ?? 1,
       // The dev renderer is served from http://localhost, which may not load
       // file:// thumbnails. Production loads from file:// and keeps the default.
       webSecurity: !opts.isDev

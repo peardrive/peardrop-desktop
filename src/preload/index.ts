@@ -4,7 +4,7 @@
  * Node and ipcRenderer themselves are never exposed.
  */
 import * as electron from 'electron'
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webFrame } from 'electron'
 import type { IpcArgs, IpcChannel, IpcPushChannel, IpcPushMap, IpcResult, PeardropApi } from '@shared/ipc'
 
 const invoke = <C extends IpcChannel>(channel: C, ...args: IpcArgs<C>): Promise<IpcResult<C>> =>
@@ -63,7 +63,9 @@ const api: PeardropApi = {
     state: () => invoke('window:state'),
     act: (action) => invoke('window:action', action),
     onState: (cb) => subscribe('window:state', cb),
-    setChrome: (chrome) => invoke('window:set-chrome', chrome)
+    setChrome: (chrome) => invoke('window:set-chrome', chrome),
+    // Synchronous, no IPC round trip, so the size slider can zoom every animation frame.
+    setZoom: (factor) => webFrame.setZoomFactor(factor)
   },
   qr: { generate: (text) => invoke('qr:generate', text) },
   app: {

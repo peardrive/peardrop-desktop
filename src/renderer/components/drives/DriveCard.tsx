@@ -1,10 +1,14 @@
 /**
- * DriveCard — one share/download in the card grid.
+ * DriveCard — one share/download in the expanded layout (two wide columns).
  *
- * Thumbnail · title (+ gold star when favourited) · status line · progress
- * bar while transferring · contextual buttons · folder icon · ⋮ menu. Clicking the
- * thumbnail or the title opens the file (or the folder modal); the rest of
- * the card does nothing on click. Right-click opens the menu at the pointer.
+ *   [ 64px thumbnail ]  Title ★                       [state buttons] [📁] [⋮]
+ *                       Picture • 1.2 MB • Active – 1.2 MB/s
+ *                       [progress bar while transferring]
+ *
+ * Clicking the thumbnail or the title opens the file (or the folder modal);
+ * there is no Open button. Transient state buttons (resume, cancel, retry …)
+ * stay visible; everything else is in the ⋮ menu, which right-click also
+ * opens at the pointer.
  *
  * @example <DriveCard drive={item} fileCount={matchCount} highlighted={id === highlightId} />
  */
@@ -26,6 +30,8 @@ import { CancellingOverlay, DeleteCountdown } from './DriveOverlays'
 import { DriveRowActions } from './DriveRowActions'
 import { DriveStatusLine } from './DriveStatusLine'
 import { DriveThumb } from './DriveThumb'
+
+const THUMB = 64
 
 export interface DriveCardProps {
   drive: DriveItemModel
@@ -56,27 +62,27 @@ export const DriveCard = memo(function DriveCard({ drive, fileCount, highlighted
         if (!busy && !drive.isPlaceholder) menu.openAt({ x: e.clientX, y: e.clientY })
       }}
       className={cn(
-        'group relative flex min-w-0 cursor-default items-center gap-3 rounded-card px-2 py-2.5 transition-colors',
+        'group relative flex min-w-0 cursor-default items-center gap-3.5 rounded-card px-2.5 py-2.5 transition-colors',
         !busy && 'hover:bg-fg/[0.04]',
         highlighted && 'animate-highlight'
       )}
     >
       {drive.isPlaceholder ? (
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[9px] bg-fg/[0.06]" title={drive.shareLink}>
+        <div className="flex shrink-0 items-center justify-center rounded-[9px] bg-fg/[0.06]" style={{ width: THUMB, height: THUMB }} title={drive.shareLink}>
           {drive.receive?.phase === 'waiting' ? (
-            <VIcon name="directbox-receive" size={20} className="text-warning" />
+            <VIcon name="directbox-receive" size={26} className="text-warning" />
           ) : (
-            <Spinner className="h-4 w-4 text-warning" />
+            <Spinner className="h-5 w-5 text-warning" />
           )}
         </div>
       ) : (
         <DriveOpenTarget drive={drive} disabled={busy} decorative className="shrink-0 rounded-[9px]">
-          <DriveThumb drive={drive} title={drive.title} size={40} />
+          <DriveThumb drive={drive} title={drive.title} size={THUMB} />
         </DriveOpenTarget>
       )}
 
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <div className="flex min-w-0 items-center gap-1">
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className="flex min-w-0 items-center gap-1.5">
           {drive.isPlaceholder ? (
             <span className="truncate text-[13px] font-semibold text-fg" title={drive.title}>
               {drive.title}
@@ -88,13 +94,15 @@ export const DriveCard = memo(function DriveCard({ drive, fileCount, highlighted
           )}
           {drive.favorite && <Icon name="star" className="h-3 w-3 shrink-0 text-star" label="Favorite" />}
         </div>
-        <DriveStatusLine drive={drive} fileCount={fileCount} />
+        <DriveStatusLine drive={drive} fileCount={fileCount} showSize />
         {showProgress && <ProgressBar value={drive.progress ?? 0} tone="warning" className="mt-1" />}
       </div>
 
-      <DriveRowActions drive={drive} onAction={(a) => runRowAction(a, drive)} />
-      <DriveRevealButton drive={drive} disabled={busy} />
-      {!drive.isPlaceholder && <DriveMenuButton drive={drive} menu={menu} />}
+      <div className="flex shrink-0 items-center gap-1 self-start pt-0.5">
+        <DriveRowActions drive={drive} exclude={['open']} onAction={(a) => runRowAction(a, drive)} />
+        <DriveRevealButton drive={drive} disabled={busy} />
+        {!drive.isPlaceholder && <DriveMenuButton drive={drive} menu={menu} />}
+      </div>
 
       {pending && <DeleteCountdown pending={pending} onUndo={() => cancelRemoval(drive.id)} />}
       {!pending && cancelling && <CancellingOverlay />}

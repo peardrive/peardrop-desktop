@@ -1,5 +1,6 @@
 /**
- * LibraryView — the content panel body: list in grid or table form, or the
+ * LibraryView — the content panel body: the drives as compact rows (list),
+ * wide two-column cards (expanded) or thumbnail tiles (grid), or the
  * right empty state (nothing shared, nothing pinned, no search hits,
  * engine down).
  *
@@ -12,6 +13,7 @@ import { useSettingsStore } from '../../stores/settings-store'
 import { useUiStore } from '../../stores/ui-store'
 import { DriveGrid } from '../drives/DriveGrid'
 import { DriveTable } from '../drives/DriveTable'
+import { DriveTiles } from '../drives/DriveTiles'
 import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
 import { Icon } from '../ui/Icon'
@@ -101,5 +103,7 @@ export function LibraryView() {
     )
   }
 
-  return view === 'table' ? <DriveTable items={items} highlightId={highlightId} /> : <DriveGrid items={items} search={search} highlightId={highlightId} />
+  if (view === 'list') return <DriveTable items={items} highlightId={highlightId} />
+  if (view === 'grid') return <DriveTiles items={items} search={search} highlightId={highlightId} />
+  return <DriveGrid items={items} search={search} highlightId={highlightId} />
 }
