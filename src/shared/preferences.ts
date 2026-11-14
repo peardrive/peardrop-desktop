@@ -35,6 +35,12 @@ export type ListViewMode = 'list' | 'expanded' | 'grid'
 export type TileSize = 'small' | 'medium' | 'large'
 /** Layout ids from before the three-layout design (older preferences.json files). */
 const LEGACY_VIEW_IDS: Record<string, ListViewMode> = { table: 'list' }
+/**
+ * The four named sizes of the 2026-11-14 test build (Small / Default / Large / Larger, at 90%,
+ * 100%, 110% and 125%), as steps of the slider at the same zoom. "default" was never a choice,
+ * so it becomes today's default rather than 100%.
+ */
+const LEGACY_UI_SCALES: Record<string, number> = { small: 0, default: UI_SCALE_DEFAULT_STEP, large: 4, xlarge: 7 }
 export type SortField = 'recent' | 'status' | 'size' | 'name' | 'peers' | 'filetype'
 export type SortDirection = 'asc' | 'desc'
 
@@ -114,7 +120,7 @@ export function sanitizePreferences(input: unknown): Preferences {
     version: 1,
     appearance: {
       theme: pick(LEGACY_THEME_IDS[src.appearance?.theme] ?? src.appearance?.theme, [...THEME_IDS, 'system'] as const, d.appearance.theme),
-      uiScale: num(src.appearance?.uiScale, d.appearance.uiScale, 0, UI_SCALE_MAX_STEP, true)
+      uiScale: num(LEGACY_UI_SCALES[src.appearance?.uiScale] ?? src.appearance?.uiScale, d.appearance.uiScale, 0, UI_SCALE_MAX_STEP, true)
     },
     network: {
       bootstrap: typeof src.network?.bootstrap === 'string' ? src.network.bootstrap.trim() : d.network.bootstrap

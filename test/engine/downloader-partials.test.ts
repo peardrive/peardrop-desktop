@@ -92,7 +92,8 @@ describe('downloader partial files', () => {
       const drive = makeDrive({ chunks: 8, failAfter: 3 })
       const result = await downloadFromDrive(drive as any, { destDir: dir, totalBytes: CHUNK.length * 8, shareName: 'movie.bin' })
       expect(result.files).toEqual([])
-      expect(result.failed).toEqual([{ key: '/movie.bin', error: 'peer vanished' }])
+      // The path it was going to, so a retry keeps the same name; nothing is ON it.
+      expect(result.failed).toEqual([{ key: '/movie.bin', error: 'peer vanished', path: path.join(dir, 'movie.bin') }])
       expect(result.totalBytes).toBe(0)
       expect(fs.readdirSync(dir)).toEqual([])
     } finally {

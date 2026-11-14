@@ -31,6 +31,13 @@ describe('preferences', () => {
     expect(sanitizePreferences({ appearance: { uiScale: 99 } }).appearance.uiScale).toBe(20)
     expect(sanitizePreferences({ appearance: { uiScale: -3 } }).appearance.uiScale).toBe(0)
     expect(sanitizePreferences({ appearance: { uiScale: 'big' } }).appearance.uiScale).toBe(DEFAULT_PREFERENCES.appearance.uiScale)
+    // The named sizes saved by the 2026-11-14 test build land on the same zoom.
+    const step = (v: string) => sanitizePreferences({ appearance: { uiScale: v } }).appearance.uiScale
+    expect(uiScaleFactor(step('small'))).toBeCloseTo(0.9)
+    expect(uiScaleFactor(step('large'))).toBeCloseTo(1.1)
+    expect(uiScaleFactor(step('xlarge'))).toBeCloseTo(1.25)
+    expect(step('default')).toBe(DEFAULT_PREFERENCES.appearance.uiScale)
+    expect(step('toString')).toBe(DEFAULT_PREFERENCES.appearance.uiScale)
     expect(sanitizePreferences({ layout: { sidebarWidth: 9999 } }).layout.sidebarWidth).toBe(320)
     expect(sanitizePreferences({ layout: { sidebarWidth: 10 } }).layout.sidebarWidth).toBe(140)
     expect(sanitizePreferences({ layout: { sidebarWidth: 211.4 } }).layout.sidebarWidth).toBe(211)

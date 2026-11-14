@@ -50,3 +50,6 @@ Thumbs.db
 desktop.ini
 
 docs/internal/
+
+# Local agent notes, not part of the shipped repo
+CLAUDE.md

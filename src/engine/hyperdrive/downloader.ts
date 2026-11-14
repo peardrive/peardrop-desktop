@@ -64,6 +64,15 @@ export interface DownloadedFile {
 export interface FailedFile {
   key: string
   error: string
+  /**
+   * Absolute path this file was being written to, when one was chosen.
+   *
+   * Nothing is left there: the bytes went to `path + '.part'`, which is
+   * deleted on failure (see streamFileToDisk). The backend notes the path
+   * (manifest `partialPaths`) so the next attempt, even after a restart,
+   * writes to the same name instead of a new "movie (1).mkv".
+   */
+  path?: string
 }
 
 export interface DownloadFromDriveResult {
@@ -241,7 +250,8 @@ export async function downloadFromDrive(
 
       const message = (fileErr as Error).message
       console.error('[Downloader] Failed to download file:', key, message)
-      failedFiles.push({ key, error: message })
+      // Carry the partial's path so a retry can resume into it.
+      failedFiles.push(filePath ? { key, error: message, path: filePath } : { key, error: message })
       onError({ file: key, error: message })
       // Carry on with the other files.
     }
@@ -502,8 +512,14 @@ async function targetPathFor(
 
   // Skipping getUniqueFilePath must not let one share overwrite another's
   // file, so the resume path has to be inside this download's folder.
-  const rootPrefix = path.resolve(opts.downloadRoot) + path.sep
-  if (path.resolve(resumeTarget).startsWith(rootPrefix)) {
+  //
+  // Case-insensitively on Windows, where C:\x and c:\x are one folder: a
+  // plain startsWith rejected a perfectly good note whose drive letter came
+  // back in the other case, and the retry then duplicated the file — the
+  // exact bug this resume path exists to prevent.
+  const sameCase = process.platform !== 'win32'
+  const norm = (value: string) => (sameCase ? path.resolve(value) : path.resolve(value).toLowerCase())
+  if (norm(resumeTarget).startsWith(norm(opts.downloadRoot) + path.sep)) {
     return resumeTarget
   }
 
