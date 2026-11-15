@@ -53,11 +53,12 @@ export interface ManifestDriveEntry {
   isUpload?: boolean
   error?: string
   /**
-   * Drive key → absolute path of a partial left by an interrupted download.
+   * Drive key → the path an interrupted download was writing to.
    *
    * Deliberately NOT in `files`: those are files the user actually has and
-   * the UI lists them. A partial is only a note to the next attempt about
-   * where to carry on. Cleared once the download completes.
+   * the UI lists them. This is only a note to the next attempt about which
+   * name to use (the half-written bytes themselves were in a `.part`, which
+   * is gone). Cleared once the download completes.
    */
   partialPaths?: Record<string, string>
   ttlMs?: number
@@ -222,6 +223,7 @@ export interface ManagerEvents {
     totalBytes: number
     files: RemoteFile[]
   }
+  'download-peer-connected': { driveId: string }
   'download-peer-disconnected': { driveId: string }
   'connection-status': { driveId: string; status: 'searching'; peerConnected: boolean }
 }

@@ -13,8 +13,9 @@
 import { api } from '../services/client'
 import { isVideoFile } from './file-types'
 
-const STORAGE_KEY = 'peardrop.thumbcache.v4'
-const MAX_PERSISTED = 300
+// v5: posters grew from 112px to 224px for the grid tiles (old ones are regenerated).
+const STORAGE_KEY = 'peardrop.thumbcache.v5'
+const MAX_PERSISTED = 150
 const VIDEO_CONCURRENCY = 2
 const VIDEO_TIMEOUT_MS = 25000
 
@@ -126,7 +127,7 @@ function grabVideoFrame(path: string): Promise<string> {
       return false
     }
     const draw = () => {
-      const size = 112
+      const size = 224
       const canvas = document.createElement('canvas')
       canvas.width = size
       canvas.height = size
@@ -151,10 +152,12 @@ function grabVideoFrame(path: string): Promise<string> {
     video.addEventListener('loadedmetadata', () => {
       if (!seekNext()) finish(new Error('no seek point'))
     })
+    // After `seeked` the frame at currentTime is decoded once readyState reaches
+    // HAVE_CURRENT_DATA, so it can be drawn straight away. (requestVideoFrameCallback
+    // is not used: Chromium never fires it for a video that is off screen, which this
+    // one is, so every poster used to time out and fall back to the type icon.)
     video.addEventListener('seeked', () => {
-      const rvfc = (video as HTMLVideoElement & { requestVideoFrameCallback?: (cb: () => void) => void }).requestVideoFrameCallback
-      if (rvfc) rvfc.call(video, draw)
-      else if (video.readyState >= 2) draw()
+      if (video.readyState >= 2) draw()
       else video.addEventListener('loadeddata', draw, { once: true })
     })
     video.addEventListener('error', () => finish(new Error('video load error')))

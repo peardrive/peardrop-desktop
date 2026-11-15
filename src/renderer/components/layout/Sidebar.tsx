@@ -11,16 +11,20 @@
  *
  * The user folds it with the toggle (remembered in preferences); on a
  * window narrower than SIDEBAR_FOLD_WIDTH it is always folded and the
- * toggle is hidden.
+ * toggle is hidden. Open, its width is dragged with the divider on its right
+ * edge (lights up on hover; double-click goes back to 160px).
+ *
  *
  * @example <Sidebar collapsed={false} canToggle />
  */
-import type { ReactNode } from 'react'
+import { useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { SIDEBAR_WIDTH } from '@shared/preferences'
 import { openSend } from '../../controllers/share'
 import { useTabCounts } from '../../hooks/useDrives'
 import { cn } from '../../lib/cn'
 import { useSettingsStore } from '../../stores/settings-store'
 import { useUiStore, type ListTab } from '../../stores/ui-store'
+import { FILLED_SURFACE, OUTLINED_SURFACE } from '../ui/Button'
 import { VIcon, type VIconName } from '../ui/VIcon'
 import { NetworkPanel } from './NetworkPanel'
 import { MacWindowControls, useWindowFrame } from './WindowControls'
@@ -71,6 +75,60 @@ function SideButton({
   )
 }
 
+/** Room the list keeps beside an open sidebar while it is dragged wider. */
+const MIN_MAIN_WIDTH = 440
+
+/** The divider on the sidebar's right edge. Drags the width live; saves it on release. */
+function SidebarGutter({ width, onDrag, onDone }: { width: number; onDrag(w: number | null): void; onDone(w: number): void }) {
+  const [active, setActive] = useState(false)
+  const drag = useRef<{ startX: number; startW: number; w: number } | null>(null)
+
+  const clampWidth = (w: number) =>
+    Math.round(Math.max(SIDEBAR_WIDTH.min, Math.min(SIDEBAR_WIDTH.max, window.innerWidth - MIN_MAIN_WIDTH, w)))
+
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    drag.current = { startX: e.clientX, startW: width, w: width }
+    setActive(true)
+    document.documentElement.dataset.colDrag = ''
+  }
+  const onPointerMove = (e: ReactPointerEvent) => {
+    const d = drag.current
+    if (!d) return
+    // The button came up somewhere we never heard about (focus lost, OS gesture): stop here.
+    if (!(e.buttons & 1)) return end()
+    d.w = clampWidth(d.startW + e.clientX - d.startX)
+    onDrag(d.w)
+  }
+  const end = () => {
+    const d = drag.current
+    if (!d) return
+    drag.current = null
+    setActive(false)
+    delete document.documentElement.dataset.colDrag
+    onDone(d.w)
+  }
+
+  return (
+    <div
+      className="pd-gutter no-drag"
+      data-active={active || undefined}
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize sidebar"
+      title="Drag to resize · double-click to reset"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={end}
+      onPointerCancel={end}
+      onLostPointerCapture={end}
+      onDoubleClick={() => onDone(SIDEBAR_WIDTH.default)}
+    />
+  )
+}
+
 export function Sidebar({ collapsed, canToggle }: SidebarProps) {
   const tab = useUiStore((s) => s.tab)
   const page = useUiStore((s) => s.page)
@@ -80,6 +138,10 @@ export function Sidebar({ collapsed, canToggle }: SidebarProps) {
   const update = useSettingsStore((s) => s.updatePreferences)
   const counts = useTabCounts()
   const frame = useWindowFrame()
+  const savedWidth = useSettingsStore((s) => s.preferences.layout.sidebarWidth)
+  /** Width while the divider is held (not saved until it is let go). */
+  const [dragWidth, setDragWidth] = useState<number | null>(null)
+  const width = dragWidth ?? savedWidth
 
   const showList = (t: ListTab) => {
     setTab(t)
@@ -89,11 +151,23 @@ export function Sidebar({ collapsed, canToggle }: SidebarProps) {
   return (
     <aside
       className={cn(
-        'flex h-full shrink-0 flex-col justify-between gap-3 border-r-2 border-[rgb(var(--pd-panel)/0.6)] bg-gradient-to-b from-panel to-canvas px-3 transition-[width] duration-200',
+        'relative flex h-full shrink-0 flex-col justify-between gap-3 border-r-2 border-[rgb(var(--pd-panel)/0.6)] bg-gradient-to-b from-panel to-canvas px-3',
+        // Follow the pointer exactly while the divider is dragged; animate folding and unfolding.
+        dragWidth === null && 'transition-[width] duration-200',
         // Folded: 65px (Figma); 76px with the Mac traffic lights so their 52px row keeps 12px margins.
-        collapsed ? cn('py-3', frame === 'mac' ? 'w-[76px]' : 'w-[65px]') : 'w-[160px] py-5'
+        collapsed ? cn('py-3', frame === 'mac' ? 'w-[76px]' : 'w-[65px]') : 'py-5'
       )}
+      style={collapsed ? undefined : { width }}
     >
+      {!collapsed && (
+        <SidebarGutter
+          width={width}
+          onDrag={setDragWidth}
+          onDone={(w) => {
+            void update({ layout: { sidebarWidth: w } }).finally(() => setDragWidth(null))
+          }}
+        />
+      )}
       <div className={cn('flex min-h-0 flex-col', collapsed ? 'items-center gap-3' : 'items-end gap-4')}>
         {/* Title-bar row: window controls + sidebar toggle; the empty space drags the window. */}
         <div
@@ -128,7 +202,8 @@ export function Sidebar({ collapsed, canToggle }: SidebarProps) {
               title="Send"
               aria-label={collapsed ? 'Send' : undefined}
               className={cn(
-                'flex w-full items-center gap-1 overflow-hidden rounded-lg bg-accent px-3 py-1 text-[12px] font-semibold leading-5 text-accent-on transition-[filter] hover:brightness-110 active:brightness-95',
+                FILLED_SURFACE,
+                'flex w-full items-center gap-1 overflow-hidden rounded-lg px-3 py-1 text-[12px] font-semibold leading-5 text-accent-on transition-[filter] hover:brightness-110 active:brightness-95',
                 collapsed && 'justify-center'
               )}
             >
@@ -141,7 +216,8 @@ export function Sidebar({ collapsed, canToggle }: SidebarProps) {
               title="Receive"
               aria-label={collapsed ? 'Receive' : undefined}
               className={cn(
-                'flex w-full items-center gap-1 overflow-hidden rounded-lg border border-accent px-3 py-1 text-[12px] font-semibold leading-5 text-accent backdrop-blur-[9px] transition-colors hover:bg-accent/10',
+                OUTLINED_SURFACE,
+                'flex w-full items-center gap-1 overflow-hidden rounded-lg border border-accent px-3 py-1 text-[12px] font-semibold leading-5 text-accent transition-[filter] hover:brightness-125',
                 collapsed && 'justify-center'
               )}
             >

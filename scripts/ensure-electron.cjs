@@ -49,10 +49,11 @@ if (binaryOk()) {
   process.exit(0)
 }
 
-console.log(`[ensure-electron] Electron ${version} binary missing or incomplete — running its installer…`)
+console.log(`[ensure-electron] Setting up Electron ${version}…`)
 fs.rmSync(path.join(electronDir, 'dist'), { recursive: true, force: true })
 const res = spawnSync(process.execPath, [path.join(electronDir, 'install.js')], { stdio: 'inherit', env: process.env })
-if (res.status !== 0 || !binaryOk()) {
+if (!binaryOk()) extractWithSystemTool()
+if (!binaryOk()) {
   console.error(
     '[ensure-electron] Could not install the Electron binary.\n' +
       '  Retry with a mirror:  set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ and run `npm run setup:electron`\n' +
@@ -61,4 +62,43 @@ if (res.status !== 0 || !binaryOk()) {
   process.exit(0) // never fail the whole npm install over this
 }
 if (read(pathFile) !== rel) fs.writeFileSync(pathFile, rel)
-console.log('[ensure-electron] Electron installed')
+console.log(`[ensure-electron] Electron ${version} ready`)
+
+/**
+ * Electron's installer downloads the zip fine, but its unzip library
+ * (extract-zip 2.0.1) silently stops part-way on newer Node (seen on Node 26):
+ * the process exits 0 with only a handful of files written and no path.txt.
+ * The zip is still in Electron's download cache, so unzip it with the OS tool.
+ */
+function extractWithSystemTool() {
+  const arch = process.env.npm_config_arch || process.arch
+  const zipName = `electron-v${version}-${platform}-${arch}.zip`
+  const home = require('os').homedir()
+  const cacheRoots = [
+    process.env.electron_config_cache,
+    platform === 'darwin' && path.join(home, 'Library', 'Caches', 'electron'),
+    platform === 'win32' && path.join(process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'electron', 'Cache'),
+    platform === 'linux' && path.join(process.env.XDG_CACHE_HOME || path.join(home, '.cache'), 'electron'),
+  ].filter(Boolean)
+
+  let zip = null
+  for (const root of cacheRoots) {
+    if (!fs.existsSync(root)) continue
+    const candidates = [path.join(root, zipName), ...fs.readdirSync(root).map((d) => path.join(root, d, zipName))]
+    zip = candidates.find((f) => fs.existsSync(f))
+    if (zip) break
+  }
+  if (!zip) return
+
+  console.log(`[ensure-electron] finishing the Electron unzip with the system tool…`)
+  const dist = path.join(electronDir, 'dist')
+  fs.rmSync(dist, { recursive: true, force: true })
+  fs.mkdirSync(dist, { recursive: true })
+  const cmd =
+    platform === 'darwin'
+      ? ['ditto', ['-x', '-k', zip, dist]] // keeps the framework symlinks and code signature intact
+      : platform === 'win32'
+        ? ['tar', ['-xf', zip, '-C', dist]] // bsdtar ships with Windows 10+
+        : ['unzip', ['-oq', zip, '-d', dist]]
+  spawnSync(cmd[0], cmd[1], { stdio: 'inherit' })
+}

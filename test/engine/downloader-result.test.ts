@@ -60,7 +60,7 @@ test('downloadFromDrive: return includes destDir (no wrap case)', async () => {
         });
         assert.equal(result.destDir, tmp, 'destDir should equal input destDir when there is no folder wrap');
         // Sanity: full return shape.
-        assert.deepEqual(Object.keys(result).sort(), ['destDir', 'duration', 'failed', 'files', 'totalBytes']);
+        assert.deepEqual(Object.keys(result).sort(), ['bytesFromNetwork', 'destDir', 'duration', 'failed', 'files', 'totalBytes']);
         assert.deepEqual(result.files, []);
         assert.deepEqual(result.failed, []);
     } finally {

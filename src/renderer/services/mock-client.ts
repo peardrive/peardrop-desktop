@@ -258,7 +258,9 @@ export function createMockClient(): PeardropApi {
       act: async () => ({ maximized: false, fullScreen: false, focused: true }),
       onState: () => () => undefined,
       setChrome: async () => undefined,
-      setZoom: async () => undefined
+      setZoom: (factor) => {
+        document.documentElement.style.zoom = String(factor)
+      }
     },
     network: {
       stats: async () => stats,
@@ -286,7 +288,7 @@ export function createMockClient(): PeardropApi {
         identity: {
           name: 'peardrop',
           productName: 'PearDrop',
-          appId: 'com.anjou.peardrop',
+          appId: 'com.anjouinc.peardrop',
           description: 'Simple, elegant P2P file sharing',
           author: 'Anjou',
           homepage: '',

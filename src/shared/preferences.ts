@@ -7,6 +7,8 @@
  * put the app into an invalid state.
  */
 
+import { UI_SCALE_DEFAULT_STEP, UI_SCALE_MAX_STEP } from './ui-scale'
+
 /** Every theme, in picker order (palettes live in renderer/theme/themes.ts). */
 export const THEME_IDS = ['void', 'pear', 'ocean', 'paper', 'ember', 'forest', 'lavender', 'rose', 'slate', 'cream', 'synth'] as const
 export type ThemeId = (typeof THEME_IDS)[number]
@@ -27,24 +29,18 @@ export function themeScheme(pref: ThemePreference): 'dark' | 'light' | 'system' 
   return LIGHT_THEME_IDS.includes(pref) ? 'light' : 'dark'
 }
 
+/** list = compact rows · expanded = two columns of wide cards · grid = thumbnail tiles. */
+export type ListViewMode = 'list' | 'expanded' | 'grid'
+/** Tile width in the grid layout. */
+export type TileSize = 'small' | 'medium' | 'large'
+/** Layout ids from before the three-layout design (older preferences.json files). */
+const LEGACY_VIEW_IDS: Record<string, ListViewMode> = { table: 'list' }
 /**
- * UI scale steps. Implemented as a renderer zoom factor, so text, spacing and
- * icons grow together — the alternative, scaling text alone, would need every
- * hard-coded `text-[12px]` in the renderer rewritten and would leave anything
- * missed sitting at the old size next to scaled text.
+ * The four named sizes of the 2026-11-14 test build (Small / Default / Large / Larger, at 90%,
+ * 100%, 110% and 125%), as steps of the slider at the same zoom. "default" was never a choice,
+ * so it becomes today's default rather than 100%.
  */
-export const UI_SCALES = ['small', 'default', 'large', 'xlarge'] as const
-export type UiScale = (typeof UI_SCALES)[number]
-
-/** Zoom factor for each step. 1 is the designed size. */
-export const UI_SCALE_FACTORS: Record<UiScale, number> = {
-  small: 0.9,
-  default: 1,
-  large: 1.1,
-  xlarge: 1.25
-}
-
-export type ListViewMode = 'grid' | 'table'
+const LEGACY_UI_SCALES: Record<string, number> = { small: 0, default: UI_SCALE_DEFAULT_STEP, large: 4, xlarge: 7 }
 export type SortField = 'recent' | 'status' | 'size' | 'name' | 'peers' | 'filetype'
 export type SortDirection = 'asc' | 'desc'
 
@@ -52,8 +48,8 @@ export interface Preferences {
   version: 1
   appearance: {
     theme: ThemePreference
-    /** Zoom step for the whole interface. */
-    uiScale: UiScale
+    /** Interface size step, 0–20 (see shared/ui-scale.ts). */
+    uiScale: number
   }
   network: {
     /** Custom DHT bootstrap address(es), "host:port[, host:port]". Empty = public DHT. */
@@ -61,6 +57,7 @@ export interface Preferences {
   }
   list: {
     view: ListViewMode
+    tileSize: TileSize
     sortField: SortField
     sortDirection: SortDirection
   }
@@ -73,6 +70,8 @@ export interface Preferences {
     sidebarCollapsed: boolean
     /** The network panel at the bottom of the sidebar shows peers and speeds. */
     networkDetails: boolean
+    /** Width of the open sidebar in px (dragged with the divider at its right edge). */
+    sidebarWidth: number
   }
   background: {
     /** Closing the window keeps PearDrop running in the tray / menu bar. */
@@ -86,11 +85,11 @@ export interface Preferences {
 
 export const DEFAULT_PREFERENCES: Preferences = {
   version: 1,
-  appearance: { theme: 'void', uiScale: 'default' },
+  appearance: { theme: 'void', uiScale: UI_SCALE_DEFAULT_STEP },
   network: { bootstrap: '' },
-  list: { view: 'grid', sortField: 'recent', sortDirection: 'desc' },
+  list: { view: 'list', tileSize: 'medium', sortField: 'recent', sortDirection: 'desc' },
   diagnostics: { debug: false },
-  layout: { sidebarCollapsed: false, networkDetails: false },
+  layout: { sidebarCollapsed: false, networkDetails: false, sidebarWidth: 160 },
   background: { closeToTray: true, openAtLogin: false, trayNoticeShown: false }
 }
 
@@ -100,6 +99,15 @@ export type PreferencesPatch = {
 }
 
 const bool = (value: unknown, fallback: boolean): boolean => (typeof value === 'boolean' ? value : fallback)
+
+/** Open sidebar width range in px; 160 is the Figma width. */
+export const SIDEBAR_WIDTH = { min: 140, default: 160, max: 320 } as const
+
+const num = (value: unknown, fallback: number, min: number, max: number, round = false): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  const n = Math.min(max, Math.max(min, value))
+  return round ? Math.round(n) : n
+}
 
 const pick = <T extends string>(value: unknown, allowed: readonly T[], fallback: T): T =>
   typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : fallback
@@ -112,13 +120,14 @@ export function sanitizePreferences(input: unknown): Preferences {
     version: 1,
     appearance: {
       theme: pick(LEGACY_THEME_IDS[src.appearance?.theme] ?? src.appearance?.theme, [...THEME_IDS, 'system'] as const, d.appearance.theme),
-      uiScale: pick(src.appearance?.uiScale, UI_SCALES, d.appearance.uiScale)
+      uiScale: num(LEGACY_UI_SCALES[src.appearance?.uiScale] ?? src.appearance?.uiScale, d.appearance.uiScale, 0, UI_SCALE_MAX_STEP, true)
     },
     network: {
       bootstrap: typeof src.network?.bootstrap === 'string' ? src.network.bootstrap.trim() : d.network.bootstrap
     },
     list: {
-      view: pick(src.list?.view, ['grid', 'table'] as const, d.list.view),
+      view: pick(LEGACY_VIEW_IDS[src.list?.view] ?? src.list?.view, ['list', 'expanded', 'grid'] as const, d.list.view),
+      tileSize: pick(src.list?.tileSize, ['small', 'medium', 'large'] as const, d.list.tileSize),
       sortField: pick(src.list?.sortField, ['recent', 'status', 'size', 'name', 'peers', 'filetype'] as const, d.list.sortField),
       sortDirection: pick(src.list?.sortDirection, ['asc', 'desc'] as const, d.list.sortDirection)
     },
@@ -127,7 +136,8 @@ export function sanitizePreferences(input: unknown): Preferences {
     },
     layout: {
       sidebarCollapsed: bool(src.layout?.sidebarCollapsed, d.layout.sidebarCollapsed),
-      networkDetails: bool(src.layout?.networkDetails, d.layout.networkDetails)
+      networkDetails: bool(src.layout?.networkDetails, d.layout.networkDetails),
+      sidebarWidth: num(src.layout?.sidebarWidth, d.layout.sidebarWidth, SIDEBAR_WIDTH.min, SIDEBAR_WIDTH.max, true)
     },
     background: {
       closeToTray: bool(src.background?.closeToTray, d.background.closeToTray),

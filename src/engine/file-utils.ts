@@ -150,6 +150,50 @@ async function exists(target: string): Promise<boolean> {
  * A path that does not exist yet, adding " (1)", " (2)", … before the
  * extension when needed (`file.txt` → `file (1).txt`).
  */
+/**
+ * Suffix of a file still being written (same convention as mobile). A file
+ * under its real name is complete; a `.part` never is.
+ */
+export const PARTIAL_SUFFIX = '.part'
+
+/** Deepest folder level the partial sweep looks into. */
+const SWEEP_MAX_DEPTH = 4
+
+/**
+ * Delete stale `.part` files under the downloads folder. Called at startup,
+ * when nothing is being written: whatever is left is from a crash or a kill.
+ *
+ * @returns The paths removed.
+ */
+export async function sweepPartialFiles(dir: string, depth = 0): Promise<string[]> {
+  let entries: import('node:fs').Dirent[]
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+
+  const removed: string[] = []
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      if (depth < SWEEP_MAX_DEPTH) {
+        removed.push(...(await sweepPartialFiles(full, depth + 1)))
+      }
+      continue
+    }
+    if (entry.isFile() && entry.name.endsWith(PARTIAL_SUFFIX)) {
+      try {
+        await fs.rm(full, { force: true })
+        removed.push(full)
+      } catch {
+        // Locked or already gone: it will be picked up next time.
+      }
+    }
+  }
+  return removed
+}
+
 export async function getUniqueFilePath(filePath: string): Promise<string> {
   if (!(await exists(filePath))) {
     return filePath

@@ -19,9 +19,11 @@ export const useStagedFilesStore = create<StagedState>((set, get) => ({
   loading: false,
   setFiles: (files) => set({ files }),
   addFiles(files) {
+    // Newest on top, so what was just dropped is the first thing in the list.
     // Same path twice adds nothing.
     const seen = new Set(get().files.map((f) => f.path))
-    set({ files: [...get().files, ...files.filter((f) => !seen.has(f.path))] })
+    const fresh = files.filter((f) => !seen.has(f.path))
+    if (fresh.length) set({ files: [...fresh, ...get().files] })
   },
   removeAt: (index) => set({ files: get().files.filter((_, i) => i !== index) }),
   clear: () => set({ files: [] }),

@@ -94,6 +94,34 @@ describe('receive queue', () => {
     q.stop()
   })
 
+  it('retries a stalled download as soon as the sender reconnects', async () => {
+    const file = path.join(dir, 'receive-queue.json')
+    const { engine, state, bus } = fakeEngine()
+    state.online = true
+    const backend = await engine.withBackend((b) => b)
+    const okDownload = backend.download
+    // First attempt: the sender dropped mid-file (a stall is reported as a failure).
+    backend.download = async ({ driveId }: { driveId: string }) => {
+      state.downloads.push(driveId)
+      return { success: false as const, error: 'The sender went offline before any files transferred' }
+    }
+    const q = new ReceiveQueue({ file, engine: engine as any, log })
+    q.start()
+    await q.add(LINK)
+    await vi.advanceTimersByTimeAsync(10)
+    expect(state.downloads).toEqual(['recv_1'])
+    expect(q.list()[0]).toMatchObject({ phase: 'downloading', driveId: 'recv_1' })
+
+    // The backoff would wait; the sender coming back should not.
+    backend.download = okDownload
+    await vi.advanceTimersByTimeAsync(1000)
+    bus.emit('event', { type: 'download-peer-connected', driveId: 'recv_1' } satisfies TransferEvent)
+    await vi.advanceTimersByTimeAsync(2500)
+    expect(state.downloads).toEqual(['recv_1', 'recv_1'])
+    expect(q.list()).toEqual([])
+    q.stop()
+  })
+
   it('does not queue the same link twice', async () => {
     const { engine } = fakeEngine()
     const q = new ReceiveQueue({ file: path.join(dir, 'q.json'), engine: engine as any, log })

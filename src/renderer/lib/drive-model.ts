@@ -8,7 +8,8 @@
  */
 import type { ReceiveTaskPhase } from '@shared/receive'
 import type { DriveFile, DriveRecord } from '@shared/transfer'
-import { CATEGORY_LABEL, categoryOf } from './file-types'
+import { categoryOf } from './file-types'
+import { describeShareState, type ShareStateInput, type ShareStateTone } from '../vendor/pearkit/ShareState/shareState'
 
 /**
  * Display status of a card.
@@ -150,52 +151,73 @@ export function toDriveView(
 
 const pct = (d: Pick<DriveView, 'progress'>) => (d.progress != null ? Math.round(d.progress * 100) : null)
 
-/** Text + tone of the status line ("Downloading (42%)", "Active", …). */
-export function statusPresentation(d: Pick<DriveView, 'status' | 'progress' | 'speed' | 'receive'>): { label: string; tone: Tone; moving: boolean } {
-  const p = pct(d)
-  if (d.receive) {
-    return d.receive.phase === 'searching'
-      ? { label: 'Looking for sender…', tone: 'warning', moving: false }
-      : { label: 'Waiting for sender', tone: 'warning', moving: false }
-  }
+/**
+ * Which of Pearkit's universal states a card is in. The words, the colour and the number all
+ * come from Pearkit (`describeShareState`), so this app and the phone app say the same thing
+ * the same way; this function only answers "which state", which only this app can know.
+ *
+ * - connecting  → waiting: the receive queue is looking for the sender and carries on by itself.
+ * - interrupted → paused: nothing carries it on here until Resume is pressed.
+ * - initiating  → starting: the share is open and its announce has not landed yet.
+ * - complete    → active: the files are here and can be opened.
+ * - a failure   → attention, with the few words that say what is wrong.
+ */
+export function shareStateOf(d: Pick<DriveView, 'status' | 'progress' | 'speed' | 'receive'>): ShareStateInput {
+  const percent = pct(d)
+  // A pasted link whose sender has not been reached yet: looking now, or between two looks.
+  if (d.receive) return { kind: 'waiting' }
   switch (d.status) {
     case 'downloading':
-      return { label: p != null ? `Downloading (${p}%)` : 'Downloading', tone: 'warning', moving: true }
+      return { kind: 'downloading', percent }
     case 'sharing':
-      if (p != null && p < 100) return { label: `Sharing (${p}%)`, tone: 'warning', moving: true }
+      if (percent != null && percent < 100) return { kind: 'sharing', percent }
       // Bytes leaving right now is a stronger claim than "available".
-      if (d.speed > 0) return { label: 'Sharing', tone: 'warning', moving: true }
-      return { label: 'Active', tone: 'success', moving: true }
+      if (d.speed > 0) return { kind: 'sharing' }
+      return { kind: 'active' }
     case 'complete':
-      return { label: 'Completed', tone: 'success', moving: false }
+      return { kind: 'active' }
     case 'connecting':
-      return { label: 'Connecting', tone: 'warning', moving: false }
+      return { kind: 'waiting', percent }
     case 'initiating':
-      return { label: 'Initiating', tone: 'warning', moving: false }
+      return { kind: 'starting' }
     case 'interrupted':
-      return { label: p != null ? `Disconnected at ${p}%` : 'Disconnected', tone: 'warning', moving: false }
+      return { kind: 'paused', percent }
     case 'unreachable':
-      return { label: 'Not reachable', tone: 'danger', moving: false }
+      return { kind: 'attention', note: 'Not reachable' }
     case 'lost':
-      return { label: 'Share lost', tone: 'danger', moving: false }
+      return { kind: 'attention', note: 'Share lost' }
     case 'missing':
-      return { label: 'Files removed', tone: 'danger', moving: false }
+      return { kind: 'attention', note: 'Files removed' }
     case 'error':
-      return { label: 'Failed', tone: 'danger', moving: false }
+      return { kind: 'attention', note: 'Failed' }
     case 'inactive':
     default:
-      return { label: 'Inactive', tone: 'danger', moving: false }
+      return { kind: 'inactive' }
   }
+}
+
+/** Pearkit's four colours of the words, as this app's tones. */
+const TONE_OF: Record<ShareStateTone, Tone> = { good: 'success', busy: 'warning', plain: 'muted', bad: 'danger' }
+
+/** Text + tone of the status line ("Downloading 42%", "Active", …). */
+export function statusPresentation(d: Pick<DriveView, 'status' | 'progress' | 'speed' | 'receive'>): { label: string; tone: Tone; moving: boolean } {
+  const state = describeShareState(shareStateOf(d))
+  // `moving` is whether the live rate is shown beside the words: a download, or a share someone can take from.
+  const moving = d.receive ? false : d.status === 'downloading' || d.status === 'sharing'
+  return { label: state.label, tone: TONE_OF[state.tone], moving }
 }
 
 /** The real file name behind a card (never an alias) — what the type is judged by. */
 export const sourceName = (d: Pick<DriveView, 'files' | 'name'>) => (d.files.length === 1 ? d.files[0].name : d.name)
 
-/** "Picture" / "Video" prefix — only on healthy single-file cards. */
-export function typePrefix(d: Pick<DriveView, 'status' | 'files' | 'name'>): string | null {
-  if (isGroup(d)) return null
-  if (d.status !== 'sharing' && d.status !== 'complete') return null
-  return CATEGORY_LABEL[categoryOf(sourceName(d))]
+/**
+ * The type word that used to sit in front of the status ("Picture • Active"). It is gone: the
+ * line says one state and nothing else, the same as on the phone, and the picture or icon on
+ * the card already says what kind of file it is. Kept, always null, so the status line that
+ * asks for it needs no change.
+ */
+export function typePrefix(_d: Pick<DriveView, 'status' | 'files' | 'name'>): string | null {
+  return null
 }
 
 /** True while bytes are (or are about to be) moving and the X cancels them. */

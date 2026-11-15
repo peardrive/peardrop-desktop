@@ -1,8 +1,7 @@
 /**
- * DriveGrid — the card grid. Columns are fluid (`auto-fill`, ≥ 280px each):
- * one column in the smallest window, two in the default 900px window, and
- * as many as fit on a full-screen window, so a big screen shows more items
- * instead of wider ones.
+ * DriveGrid — the expanded layout: wide cards in two columns (one when the
+ * content area is too narrow for two, e.g. a small window or a large
+ * interface size).
  *
  * @example <DriveGrid items={items} search={q} highlightId={hid} />
  */
@@ -18,7 +17,7 @@ export interface DriveGridProps {
 
 export function DriveGrid({ items, search, highlightId }: DriveGridProps) {
   return (
-    <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-x-4 gap-y-1">
+    <div className="grid grid-cols-1 gap-x-4 gap-y-1 min-[860px]:grid-cols-2">
       {items.map((d) => {
         const hits = search ? matchingFileCount(d, search) : d.files.length
         return (

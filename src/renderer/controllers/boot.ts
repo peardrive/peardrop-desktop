@@ -9,6 +9,7 @@ import { useSettingsStore } from '../stores/settings-store'
 import { useDrivesStore } from '../stores/drives-store'
 import { useReceiveStore } from '../stores/receive-store'
 import { useWindowStore } from '../stores/window-store'
+import { startUiScaleSync } from './ui-scale'
 import { handleTransferEvent } from './events'
 import { applySnapshot } from './library'
 import { syncReceiveTasks } from './receive'
@@ -59,6 +60,7 @@ export async function bootApp(): Promise<void> {
     client.engine.status()
   ])
   settings.setPreferences(prefs)
+  startUiScaleSync()
   settings.setAppInfo(info)
   // Drag regions apply only to the frameless macOS window (see styles/index.css).
   document.documentElement.dataset.windowFrame = info.windowFrame

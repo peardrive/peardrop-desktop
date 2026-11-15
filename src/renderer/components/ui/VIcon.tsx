@@ -1,6 +1,7 @@
 /**
  * VIcon — the Vuesax icons used by the 2026 sidebar/header design (exported
- * from the PearDrop Figma file into assets/icons/vuesax, unmodified).
+ * from the PearDrop Figma file into assets/icons/vuesax, unmodified), plus
+ * the three list-layout glyphs drawn in the same style (assets/icons/pd).
  *
  * The SVG files are applied as a CSS mask over `currentColor`, so each icon
  * keeps the exact shape from Figma but takes its colour from the text colour
@@ -29,6 +30,9 @@ import setting2 from '../../assets/icons/vuesax/setting-2.svg'
 import sortDescending from '../../assets/icons/vuesax/sort-descending.svg'
 import star from '../../assets/icons/vuesax/star.svg'
 import uploadSpeed from '../../assets/icons/vuesax/upload-speed.svg'
+import viewExpanded from '../../assets/icons/pd/view-expanded.svg'
+import viewGrid from '../../assets/icons/pd/view-grid.svg'
+import viewList from '../../assets/icons/pd/view-list.svg'
 
 const SOURCES = {
   'arrow-down': arrowDown,
@@ -49,7 +53,11 @@ const SOURCES = {
   'setting-2': setting2,
   'sort-descending': sortDescending,
   star,
-  'upload-speed': uploadSpeed
+  'upload-speed': uploadSpeed,
+  /** List layouts: lines · two wide blocks · four tiles. */
+  'view-list': viewList,
+  'view-expanded': viewExpanded,
+  'view-grid': viewGrid
 } as const
 
 export type VIconName = keyof typeof SOURCES

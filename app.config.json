@@ -1,11 +1,12 @@
 {
   "name": "peardrop",
   "productName": "PearDrop",
-  "appId": "com.anjou.peardrop",
+  "appId": "com.anjouinc.peardrop",
   "description": "Simple, elegant P2P file sharing",
   "author": "Anjou",
   "homepage": "https://github.com/peardrive/peardrop-desktop",
   "copyright": "Copyright © 2026 Anjou",
   "icon": "assets/icons/logo.png",
+  "macIcon": "assets/icons/logo-mac.png",
   "linkScheme": "peardrop"
 }

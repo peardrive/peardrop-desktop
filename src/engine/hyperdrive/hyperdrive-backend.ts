@@ -43,6 +43,7 @@ import {
 } from '../backend'
 import { EngineError } from '../engine-errors'
 import type { Logger } from '../logger'
+import { sweepPartialFiles } from '../file-utils'
 import { downloadFromDrive } from './downloader'
 import { HyperdriveManager } from './manager'
 import { NetworkProbe } from './network-probe'
@@ -135,6 +136,10 @@ export class HyperdriveBackend implements TransferBackend {
 
   async start(): Promise<void> {
     await fs.mkdir(this.ctx.paths.downloadsDir, { recursive: true })
+    // Nothing is being written yet, so every .part is a leftover from a
+    // crash or a kill (a stall or cancel removes its own).
+    const stale = await sweepPartialFiles(this.ctx.paths.downloadsDir)
+    if (stale.length) this.log.info('Removed stale partial files', { count: stale.length, files: stale })
     this.log.info('Starting', {
       drivesDir: this.ctx.paths.drivesDir,
       bootstrap: this.ctx.network.bootstrap.length ? this.ctx.network.bootstrap : 'public DHT'
@@ -271,6 +276,10 @@ export class HyperdriveBackend implements TransferBackend {
         bytesTotal: d.bytesTotal,
         currentFile: d.currentFile ?? null
       })
+    })
+
+    on('download-peer-connected', (d) => {
+      this.emit({ type: 'download-peer-connected', driveId: d.driveId })
     })
 
     on('download-peer-disconnected', (d) => {
@@ -593,9 +602,11 @@ export class HyperdriveBackend implements TransferBackend {
         }
       }
 
-      // Resume into the same files a previous attempt used.
+      // Resume into the same files a previous attempt used: the paths a
+      // completed attempt persisted, plus the paths an attempt in this
+      // session had started writing (a stall leaves nothing persisted).
       const priorEntry = this.manager.manifest?.drives?.[driveId]
-      const resumePaths: Record<string, string> = {}
+      const resumePaths: Record<string, string> = { ...(this.startedPaths.get(driveId) || {}) }
       for (const f of priorEntry?.files || []) {
         if (!f || !f.path) continue
         if (f.key) resumePaths[f.key] = f.path
@@ -651,6 +662,11 @@ export class HyperdriveBackend implements TransferBackend {
         onError: (data) => this.log.warn('File error', data),
         isCancelled: () => this.cancelledDownloads.has(driveId),
         onRoot: (root, isOwnFolder) => this.downloadRoots.set(driveId, { root, isOwnFolder }),
+        onFileStart: ({ key, path: target }) => {
+          const started = this.startedPaths.get(driveId) || {}
+          started[key] = target
+          this.startedPaths.set(driveId, started)
+        },
         registerAborter: (fn) => this.downloadAborters.set(driveId, fn)
       })
 
@@ -682,13 +698,16 @@ export class HyperdriveBackend implements TransferBackend {
         return { success: false, cancelled: true, error: 'Download cancelled' }
       }
 
+      // The size users see: the bytes on disk, never this attempt's network
+      // count (a resume fetches only the blocks it was missing).
+      const bytesOnDisk = result.files.reduce((sum, f) => sum + (Number(f.size) || 0), 0)
       const entry = await this.manager.addDriveEntry({
         id: driveId,
         key: session.metadata?.key,
         shareLink: session.shareLink || `${LINK_SCHEME}${session.metadata?.key || 'unknown'}`,
         name: session.shareName,
         files: result.files,
-        totalBytes: result.totalBytes,
+        totalBytes: bytesOnDisk,
         localPath: downloadPath,
         storagePath: path.join(this.manager.drivesDir, driveId),
         state: EngineDriveState.ACTIVE,
@@ -704,7 +723,14 @@ export class HyperdriveBackend implements TransferBackend {
 
       session.isSeeding = true
       session.driveEntryId = entry.driveId
-      this.log.info('Download complete, now seeding', { driveId, files: gotCount, failed: failedCount })
+      this.startedPaths.delete(driveId)
+      this.log.info('Download complete, now seeding', {
+        driveId,
+        files: gotCount,
+        failed: failedCount,
+        bytesOnDisk,
+        bytesFromNetwork: result.bytesFromNetwork
+      })
 
       const record = toRecord(entry)
       this.emit({
@@ -780,6 +806,9 @@ export class HyperdriveBackend implements TransferBackend {
       })
       .finally(() => this.reconnecting.delete(driveId))
   }
+
+  /** driveId → drive key → path an attempt in this session began writing. */
+  private readonly startedPaths = new Map<string, Record<string, string>>()
 
   private clearDownloadState(driveId: string) {
     this.activeDownloads.delete(driveId)

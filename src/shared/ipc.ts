@@ -59,7 +59,8 @@ export interface WindowChrome {
 export const WINDOWS_TITLEBAR_HEIGHT = 32
 
 /** Things the tray / OS can ask the window to do. */
-export type AppCommand = 'send' | 'receive' | 'settings'
+/** Tray menu commands, plus Cmd/Ctrl + / − / 0 (interface size; main keeps the default zoom menu out of it). */
+export type AppCommand = 'send' | 'receive' | 'settings' | 'ui-scale-up' | 'ui-scale-down' | 'ui-scale-reset'
 
 export interface IpcInvokeMap {
   // transfers (backend-neutral)
@@ -103,7 +104,6 @@ export interface IpcInvokeMap {
   'window:state': { args: []; result: WindowState }
   'window:action': { args: [WindowAction]; result: WindowState }
   'window:set-chrome': { args: [WindowChrome]; result: void }
-  'window:set-zoom': { args: [number]; result: void }
   'logs:path': { args: []; result: string }
   'logs:reveal': { args: []; result: SimpleResult }
   'logs:tail': { args: [lines?: number]; result: LogTailResult }
@@ -188,8 +188,8 @@ export interface PeardropApi {
     onState(cb: (state: WindowState) => void): Unsubscribe
     /** Paint the window chrome (Windows title bar, window background) in the active theme. */
     setChrome(chrome: WindowChrome): Promise<void>
-    /** Renderer zoom factor — the UI-scale preference, applied live. */
-    setZoom(factor: number): Promise<void>
+    /** Page zoom, applied synchronously in this window (interface size; see shared/ui-scale.ts). */
+    setZoom(factor: number): void
   }
   qr: { generate(text: string): Promise<string> }
   app: {

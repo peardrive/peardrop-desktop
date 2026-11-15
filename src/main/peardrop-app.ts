@@ -20,10 +20,11 @@
  */
 import { app, BrowserWindow, dialog, nativeTheme, net } from 'electron'
 import type { AppCommand, IpcPushChannel, IpcPushMap } from '@shared/ipc'
-import { themeScheme, UI_SCALE_FACTORS, type Preferences } from '@shared/preferences'
+import { themeScheme, type Preferences } from '@shared/preferences'
+import { UI_SCALE_DEFAULT_STEP, uiScaleFactor } from '@shared/ui-scale'
 import type { StopProgress } from '@engine/backend'
 import { LEGACY_ROOT, type PeardropPaths } from '@engine/paths'
-import { identity } from './app-identity'
+import { identity, applyDevDockIcon } from './app-identity'
 import { EngineHost } from '@engine/engine-host'
 import { registerIpc, windowState } from './ipc/register'
 import { push } from './ipc/typed-ipc'
@@ -36,7 +37,7 @@ import { ReceiveQueue } from './services/receive-queue'
 import { LibraryStore } from './stores/library-store'
 import { PreferencesStore } from './stores/preferences-store'
 import { AppTray, applyLoginItem, launchedHidden } from './tray'
-import { applyZoom, createMainWindow, currentWindowChrome } from './window'
+import { createMainWindow, currentWindowChrome } from './window'
 
 export interface PearDropAppOptions {
   runtime: RuntimeConfig
@@ -47,6 +48,15 @@ export interface PearDropAppOptions {
 /**
  * Window events after which the in-app window controls need the new state.
  */
+/** Keys (with Cmd/Ctrl) that step the interface size; '+'/'_' are the shifted keys and the numpad. */
+const UI_SCALE_KEYS: Record<string, AppCommand | undefined> = {
+  '=': 'ui-scale-up',
+  '+': 'ui-scale-up',
+  '-': 'ui-scale-down',
+  _: 'ui-scale-down',
+  '0': 'ui-scale-reset'
+}
+
 const WINDOW_STATE_EVENTS = [
   'maximize',
   'unmaximize',
@@ -154,6 +164,7 @@ export class PearDropApp {
 
   private async boot(): Promise<void> {
     const { paths, runtime, logs, log } = this
+    applyDevDockIcon()
 
     const migration = migrateLegacyData(paths, LEGACY_ROOT, log.child('migration'))
     if (migration.migrated) log.info('Legacy data migrated', migration)
@@ -295,15 +306,9 @@ export class PearDropApp {
       startHidden: opts.startHidden,
       // Fill behind the page until React paints, so the window never flashes white.
       backgroundColor: windowBackground(),
+      zoomFactor: uiScaleFactor(this.preferences?.get().appearance.uiScale ?? UI_SCALE_DEFAULT_STEP),
       hideOnClose: () => this.shouldHideOnClose(),
       onHiddenToTray: () => this.showTrayNoticeOnce()
-    })
-
-    // UI scale. Electron resets the zoom factor on every navigation, so this
-    // is reapplied after each load rather than set once at creation.
-    win.webContents.on('did-finish-load', () => {
-      const scale = this.preferences?.get().appearance.uiScale ?? 'default'
-      applyZoom(win, UI_SCALE_FACTORS[scale])
     })
 
     // Forget the window once it is really closed; showWindow() makes a new one.
@@ -318,6 +323,16 @@ export class PearDropApp {
       // The cast only satisfies Electron's per-event overloads of `on`.
       win.on(event as 'focus', pushState)
     }
+
+    // Cmd/Ctrl + / − / 0 step the interface size setting (one source of truth, on every platform)
+    // instead of Chromium's own zoom, which the default macOS View menu would otherwise change.
+    win.webContents.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown' || !(input.control || input.meta) || input.alt) return
+      const command = UI_SCALE_KEYS[input.key]
+      if (!command) return
+      event.preventDefault()
+      push(win, 'app:command', command)
+    })
 
     // Windows logoff/shutdown: let the window really close so the OS is not blocked.
     win.on('session-end', () => {

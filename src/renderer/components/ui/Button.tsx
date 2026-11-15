@@ -31,11 +31,22 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   block?: boolean
 }
 
+/**
+ * The filled green surface (sidebar Send, primary buttons): a slight top-to-bottom
+ * sheen over the accent plus a hairline highlight above and shade below, so it
+ * reads as very gently raised rather than flat.
+ */
+export const FILLED_SURFACE =
+  'bg-accent bg-gradient-to-b from-white/[0.16] to-black/[0.06] shadow-[inset_0_1px_0_rgb(255_255_255/0.28),inset_0_-1px_0_rgb(0_0_0/0.16),0_1px_2px_rgb(0_0_0/0.28)]'
+/** The outlined green surface (sidebar Receive, outline buttons): the same lift on a faint green tint. */
+export const OUTLINED_SURFACE =
+  'bg-gradient-to-b from-accent/[0.13] to-accent/[0.03] shadow-[inset_0_1px_0_rgb(255_255_255/0.07),0_1px_2px_rgb(0_0_0/0.22)]'
+
 const VARIANTS: Record<ButtonVariant, string> = {
   // Figma sidebar buttons: solid pear-green "Send", outlined "Receive" (8px radius, 1px line).
-  primary: 'bg-accent text-accent-on border border-transparent hover:brightness-110 active:brightness-95',
-  soft: 'bg-accent/10 text-accent-strong border border-accent/70 hover:bg-accent/20 hover:border-accent',
-  outline: 'bg-transparent text-accent-strong border border-accent/70 hover:bg-accent/10',
+  primary: cn(FILLED_SURFACE, 'text-accent-on border border-transparent hover:brightness-110 active:brightness-95'),
+  soft: cn(OUTLINED_SURFACE, 'text-accent-strong border border-accent/70 hover:from-accent/[0.22] hover:to-accent/[0.08] hover:border-accent'),
+  outline: cn(OUTLINED_SURFACE, 'text-accent-strong border border-accent/70 hover:from-accent/[0.2] hover:to-accent/[0.07]'),
   secondary: 'bg-fg/5 text-fg/85 border border-fg/10 hover:text-fg hover:bg-fg/10',
   danger: 'bg-danger text-white border border-transparent hover:brightness-110',
   'danger-outline': 'bg-transparent text-danger border border-danger/70 hover:bg-danger/10',

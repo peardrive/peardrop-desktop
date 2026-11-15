@@ -1,13 +1,15 @@
 /**
  * DriveStatusLine — the muted line under a card's title:
- *   [📄 3 Files •] [Picture •] Active – 1.2 MB/s
- * File count for folders, a type prefix for healthy single files, the
- * coloured status, and the live rate while bytes move.
+ *   [📄 3 Files •] [Picture •] [1.2 MB •] Active – 1.2 MB/s
+ * File count for folders, a type prefix for healthy single files, the size
+ * (expanded and grid layouts), the coloured status, and the live rate while
+ * bytes move.
  *
  * @example <DriveStatusLine drive={drive} fileCount={drive.files.length} />
  */
 import { useEffect, useState } from 'react'
-import { formatSpeed } from '../../lib/format'
+import { cn } from '../../lib/cn'
+import { formatBytes, formatSpeed } from '../../lib/format'
 import { isGroup, statusPresentation, typePrefix, type DriveView } from '../../lib/drive-model'
 import { Icon } from '../ui/Icon'
 import { StatusText } from '../ui/StatusText'
@@ -16,6 +18,11 @@ export interface DriveStatusLineProps {
   drive: DriveView
   /** Shown file count (narrowed while a search matches files inside). */
   fileCount?: number
+  /** Also show the total size. */
+  showSize?: boolean
+  /** Let the line wrap instead of truncating (grid tiles). */
+  wrap?: boolean
+  className?: string
 }
 
 /** "in 2m" / "in 12s" until a queued link's next discovery attempt (ticks while shown). */
@@ -30,13 +37,13 @@ function NextTry({ at }: { at: number }) {
   return <span className="tabular whitespace-nowrap">· next try in {s < 60 ? `${s}s` : `${Math.ceil(s / 60)}m`}</span>
 }
 
-export function DriveStatusLine({ drive, fileCount }: DriveStatusLineProps) {
+export function DriveStatusLine({ drive, fileCount, showSize, wrap, className }: DriveStatusLineProps) {
   const { label, tone, moving } = statusPresentation(drive)
   const prefix = typePrefix(drive)
   const count = fileCount ?? drive.files.length
   const speed = moving ? formatSpeed(drive.speed) : ''
   return (
-    <div className="flex min-w-0 items-center gap-1 text-[11px] text-muted" title={drive.receive?.lastError ?? undefined}>
+    <div className={cn('flex min-w-0 items-center gap-1 text-[11px] text-muted', wrap && 'flex-wrap', className)} title={drive.receive?.lastError ?? undefined}>
       {isGroup(drive) && (
         <>
           <span className="inline-flex items-center gap-1 whitespace-nowrap">
@@ -49,6 +56,12 @@ export function DriveStatusLine({ drive, fileCount }: DriveStatusLineProps) {
       {prefix && (
         <>
           <span className="whitespace-nowrap font-semibold text-fg/90">{prefix}</span>
+          <span aria-hidden>•</span>
+        </>
+      )}
+      {showSize && drive.size > 0 && (
+        <>
+          <span className="tabular whitespace-nowrap">{formatBytes(drive.size)}</span>
           <span aria-hidden>•</span>
         </>
       )}

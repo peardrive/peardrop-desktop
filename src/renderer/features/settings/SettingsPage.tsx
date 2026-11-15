@@ -10,11 +10,12 @@ import { toast } from '../../stores/toast-store'
 import { useSettingsStore } from '../../stores/settings-store'
 import { useUiStore } from '../../stores/ui-store'
 import { Button } from '../../components/ui/Button'
+import { SegmentedControl } from '../../components/ui/SegmentedControl'
 import { Switch } from '../../components/ui/Switch'
 import { NetworkSettings } from './NetworkSettings'
 import { PageHeader, SettingsRow, SettingsSection } from './SettingsLayout'
 import { ThemePicker } from './ThemePicker'
-import { UiScalePicker } from './UiScalePicker'
+import { UiScaleControl } from './UiScaleControl'
 
 function PathValue({ path }: { path: string | undefined }) {
   return <span className="select-text break-all font-mono text-[10px]">{path ?? '—'}</span>
@@ -24,6 +25,7 @@ export default function SettingsPage() {
   const info = useSettingsStore((s) => s.appInfo)
   const debug = useSettingsStore((s) => s.preferences.diagnostics.debug)
   const background = useSettingsStore((s) => s.preferences.background)
+  const tileSize = useSettingsStore((s) => s.preferences.list.tileSize)
   const update = useSettingsStore((s) => s.updatePreferences)
   const setPage = useUiStore((s) => s.setPage)
   const [copying, setCopying] = useState(false)
@@ -58,13 +60,31 @@ export default function SettingsPage() {
         </div>
 
         <SettingsSection title="Appearance">
-          <SettingsRow
-            icon="monitor"
-            label="Font size"
-            description="Scales the whole interface, not just text. Applies instantly."
-            control={<UiScalePicker />}
-          />
           <SettingsRow icon="palette" label="Theme" description="Applies to every screen instantly. Hover a theme to read about it." stacked control={<ThemePicker />} />
+          <SettingsRow
+            icon="text-size"
+            label="Size"
+            description={`Makes text, icons and spacing bigger or smaller. ${info?.platform === 'darwin' ? '⌘' : 'Ctrl'} + and ${info?.platform === 'darwin' ? '⌘' : 'Ctrl'} − do the same anywhere; ${info?.platform === 'darwin' ? '⌘' : 'Ctrl'} 0 goes back to the default.`}
+            stacked
+            control={<UiScaleControl />}
+          />
+          <SettingsRow
+            icon="grid"
+            label="Grid tiles"
+            description="How big the thumbnails are in the grid layout."
+            control={
+              <SegmentedControl
+                ariaLabel="Grid tile size"
+                value={tileSize}
+                onChange={(v) => void update({ list: { tileSize: v } })}
+                options={[
+                  { value: 'small', label: 'Small' },
+                  { value: 'medium', label: 'Medium' },
+                  { value: 'large', label: 'Large' }
+                ]}
+              />
+            }
+          />
         </SettingsSection>
 
         <NetworkSettings />

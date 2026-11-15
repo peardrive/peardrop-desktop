@@ -54,6 +54,8 @@ export interface CreateWindowOptions {
   log: Logger
   /** Window fill behind the page (matches the theme so a resize never flashes). */
   backgroundColor?: string
+  /** Page zoom to open at (the interface size preference), so the first paint is already the right size. */
+  zoomFactor?: number
   /** Create without showing (launched hidden into the tray). */
   startHidden?: boolean
   /** Asked on every close: true keeps the app alive and only hides the window. */
@@ -130,24 +132,6 @@ export function applyWindowChrome(win: BrowserWindow, chrome: WindowChrome): voi
   }
 }
 
-/**
- * Apply the UI-scale preference as a renderer zoom factor.
- *
- * setZoomFactor has to be called on a live webContents, and Electron resets
- * it on navigation — so this is called again after every load, not just once.
- */
-export function applyZoom(win: BrowserWindow | null, factor: number): void {
-  if (!win || win.isDestroyed()) return
-  if (!Number.isFinite(factor) || factor <= 0) return
-  // Guard rails: a factor outside this range makes the window unusable.
-  const clamped = Math.min(2, Math.max(0.5, factor))
-  try {
-    win.webContents.setZoomFactor(clamped)
-  } catch {
-    /* contents gone */
-  }
-}
-
 export function createMainWindow(opts: CreateWindowOptions): BrowserWindow {
   const saved = loadState(opts.stateFile)
   const title = opts.profile ? `${identity.productName} — ${opts.profile}` : identity.productName
@@ -170,6 +154,7 @@ export function createMainWindow(opts: CreateWindowOptions): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      zoomFactor: opts.zoomFactor ?? 1,
       // The dev renderer is served from http://localhost, which may not load
       // file:// thumbnails. Production loads from file:// and keeps the default.
       webSecurity: !opts.isDev

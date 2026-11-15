@@ -5,6 +5,18 @@
  * safeJoin, so nothing is written outside the download folder.
  * Reliability: the file listing and every file have a stall watchdog, so a
  * sender that disappears mid-transfer fails the download instead of hanging.
+ *
+ * On-disk contract (same as mobile): a file is written to `name.part` and
+ * renamed onto `name` only after the write stream has closed. A stall, an
+ * error or a cancel deletes the `.part`. So a file under its real name is
+ * always complete, and a retry never finds a half-written ghost under the
+ * name it wants (which is what used to produce "movie (2).mp4",
+ * "movie (3).mp4" … one per interrupted attempt).
+ *
+ * Progress and the result's `totalBytes` count bytes WRITTEN TO DISK. The
+ * blobs core's 'download' event only counts blocks that crossed the network,
+ * so on a resumed attempt (most blocks already local) it under-reports — a
+ * 1.9 GB file once showed as 617 MB because of that.
  */
 import { createWriteStream } from 'node:fs'
 import fs from 'node:fs/promises'
@@ -13,6 +25,7 @@ import type { Readable } from 'node:stream'
 import type Hyperdrive from 'hyperdrive'
 import { EngineError, FileStallError, PathTraversalError } from '../engine-errors'
 import {
+  PARTIAL_SUFFIX,
   ensureDir,
   formatBytes,
   formatSpeed,
@@ -52,11 +65,12 @@ export interface FailedFile {
   key: string
   error: string
   /**
-   * Absolute path of the partial file left on disk, when one was opened.
+   * Absolute path this file was being written to, when one was chosen.
    *
-   * Only the cancel path deletes its partial; an interruption leaves it, and
-   * without this the caller cannot record where it went — so the next attempt
-   * had no resume path and getUniqueFilePath invented a new name every time.
+   * Nothing is left there: the bytes went to `path + '.part'`, which is
+   * deleted on failure (see streamFileToDisk). The backend notes the path
+   * (manifest `partialPaths`) so the next attempt, even after a restart,
+   * writes to the same name instead of a new "movie (1).mkv".
    */
   path?: string
 }
@@ -64,7 +78,10 @@ export interface FailedFile {
 export interface DownloadFromDriveResult {
   files: DownloadedFile[]
   failed: FailedFile[]
+  /** Bytes of the files on disk (sum of `files[].size`). */
   totalBytes: number
+  /** Bytes that crossed the network in this attempt (less on a resume). */
+  bytesFromNetwork: number
   duration: number
   /** The folder actually written to (after "(1)" disambiguation). */
   destDir: string
@@ -83,6 +100,11 @@ export interface DownloadFromDriveOptions {
   onPeerConnected?: (data: { shareName: string | null; totalBytes: number }) => void
   /** Called once the destination folder is known, before any file is written. */
   onRoot?: (root: string, isOwnFolder: boolean) => void
+  /**
+   * Called with a file's final path before its first byte is written, so a
+   * retry after a stall can target the same path instead of a new "(n)".
+   */
+  onFileStart?: (info: { key: string; path: string }) => void
   /** Receives an abort function for whatever is in flight right now. */
   registerAborter?: (abort: () => void) => void
   /** Checked before each file and between chunks; true aborts the download. */
@@ -140,6 +162,7 @@ export async function downloadFromDrive(
     onError = noop,
     onPeerConnected = noop,
     onRoot = noop,
+    onFileStart = noop,
     registerAborter = noop,
     isCancelled = () => false,
     resumePaths = null,
@@ -200,17 +223,26 @@ export async function downloadFromDrive(
 
     try {
       filePath = await targetPathFor(key, { downloadRoot, resumePaths })
-      const size = await streamFileToDisk(drive, key, filePath, { isCancelled, registerAborter })
+      try {
+        onFileStart({ key, path: filePath })
+      } catch {
+        // A callback failing is never fatal.
+      }
+      const size = await streamFileToDisk(drive, key, filePath, {
+        isCancelled,
+        registerAborter,
+        onChunk: progress.onChunk
+      })
+      progress.fileDone(size)
 
       downloadedFiles.push({ name: path.basename(filePath), path: filePath, size, key })
       console.log('[Downloader] Downloaded:', path.basename(filePath), formatBytes(size))
     } catch (fileErr) {
+      // Whatever stopped this file, its .part is already gone (see
+      // streamFileToDisk); only completed files are ever left behind.
+      progress.fileAborted()
+
       if (isCancelledError(fileErr)) {
-        // The partial file never made it into downloadedFiles, so nothing
-        // downstream knows it exists: remove it here.
-        if (filePath) {
-          await removePartialFile(filePath)
-        }
         fileErr.partialFiles = downloadedFiles.slice()
         fileErr.downloadRoot = ownFolder
         throw fileErr
@@ -245,7 +277,8 @@ export async function downloadFromDrive(
   const result: DownloadFromDriveResult = {
     files: downloadedFiles,
     failed: failedFiles,
-    totalBytes: progress.bytes(),
+    totalBytes: downloadedFiles.reduce((sum, f) => sum + f.size, 0),
+    bytesFromNetwork: progress.fromNetwork(),
     duration: Date.now() - startTime,
     destDir: downloadRoot
   }
@@ -255,6 +288,7 @@ export async function downloadFromDrive(
     files: downloadedFiles.length,
     failed: failedFiles.length,
     totalBytes: result.totalBytes,
+    bytesFromNetwork: result.bytesFromNetwork,
     duration: result.duration
   })
 
@@ -336,8 +370,10 @@ async function listFilesToDownload(
 }
 
 /**
- * Count bytes arriving on the blobs core and report throttled progress.
- * Returns accessors for the running totals.
+ * Byte progress, measured at the disk: completed files plus the file being
+ * written. That is the only count that survives a resume, where hyperdrive
+ * serves most blocks from local storage and the network sees only the gap.
+ * The blobs core's 'download' event is still counted, for the log.
  */
 async function trackByteProgress(
   drive: Hyperdrive,
@@ -346,51 +382,76 @@ async function trackByteProgress(
     knownTotalBytes: number
     onProgress: (data: DownloaderProgress) => void
   }
-): Promise<{ bytes: () => number; speed: () => number }> {
-  let bytesDownloaded = 0
+): Promise<{
+  bytes: () => number
+  fromNetwork: () => number
+  speed: () => number
+  onChunk: (length: number) => void
+  fileDone: (size: number) => void
+  fileAborted: () => void
+}> {
+  let completedBytes = 0
+  let currentFileBytes = 0
+  let networkBytes = 0
   let lastUpdate = 0
 
+  const bytes = () => completedBytes + currentFileBytes
   const speed = () => {
     const elapsedSeconds = (Date.now() - opts.startTime) / 1000
-    return elapsedSeconds > 0 ? bytesDownloaded / elapsedSeconds : 0
+    return elapsedSeconds > 0 ? bytes() / elapsedSeconds : 0
+  }
+
+  const report = () => {
+    const now = Date.now()
+    if (now - lastUpdate <= PROGRESS_THROTTLE_MS) {
+      return
+    }
+    lastUpdate = now
+
+    const total = opts.knownTotalBytes
+    const written = bytes()
+    const currentSpeed = speed()
+    // Capped at 99: 100 is reported once the last file is on disk.
+    const percent = total > 0 ? Math.min(99, Math.round((written / total) * 100)) : -1
+
+    opts.onProgress({
+      percent,
+      bytesTransferred: written,
+      totalBytes: total,
+      speed: currentSpeed,
+      bytesFormatted: formatBytes(written),
+      totalFormatted: total > 0 ? formatBytes(total) : '—',
+      speedFormatted: formatSpeed(currentSpeed)
+    })
   }
 
   try {
     const blobs = await drive.getBlobs()
-
     if (blobs?.core) {
-      console.log('[Downloader] Hooking into blobs core for progress')
-
-      blobs.core.on('download', (_index: number, bytes: number) => {
-        bytesDownloaded += bytes
-
-        const now = Date.now()
-        if (now - lastUpdate <= PROGRESS_THROTTLE_MS) {
-          return
-        }
-        lastUpdate = now
-
-        const total = opts.knownTotalBytes
-        const currentSpeed = speed()
-        // Capped at 99: 100 is reported once the last file is on disk.
-        const percent = total > 0 ? Math.min(99, Math.round((bytesDownloaded / total) * 100)) : -1
-
-        opts.onProgress({
-          percent,
-          bytesTransferred: bytesDownloaded,
-          totalBytes: total,
-          speed: currentSpeed,
-          bytesFormatted: formatBytes(bytesDownloaded),
-          totalFormatted: total > 0 ? formatBytes(total) : '—',
-          speedFormatted: formatSpeed(currentSpeed)
-        })
+      blobs.core.on('download', (_index: number, bytesReceived: number) => {
+        networkBytes += bytesReceived
       })
     }
   } catch (err) {
-    console.log('[Downloader] Could not hook blobs for progress:', (err as Error).message)
+    console.log('[Downloader] Could not hook blobs for network accounting:', (err as Error).message)
   }
 
-  return { bytes: () => bytesDownloaded, speed }
+  return {
+    bytes,
+    fromNetwork: () => networkBytes,
+    speed,
+    onChunk: (length) => {
+      currentFileBytes += length
+      report()
+    },
+    fileDone: (size) => {
+      completedBytes += size
+      currentFileBytes = 0
+    },
+    fileAborted: () => {
+      currentFileBytes = 0
+    }
+  }
 }
 
 /**
@@ -469,6 +530,11 @@ async function targetPathFor(
 /**
  * Stream one file from the drive to disk (never loads it into memory).
  *
+ * Writes `filePath + '.part'` and renames it onto `filePath` once the write
+ * stream has closed (so the data is flushed). On any failure the `.part` is
+ * deleted: a stall, a stream error or a cancel leaves nothing behind, and a
+ * previous complete file at `filePath` (a resume rewriting it) is untouched.
+ *
  * If the peer drops mid-transfer, a hyperdrive read stream waits forever for
  * blocks that never come, so a watchdog fails the file after
  * STALL_TIMEOUT_MS without data. Cancellation is checked between chunks and
@@ -483,81 +549,99 @@ async function streamFileToDisk(
   opts: {
     isCancelled: () => boolean
     registerAborter: (abort: () => void) => void
+    onChunk?: (length: number) => void
   }
 ): Promise<number> {
+  const partPath = filePath + PARTIAL_SUFFIX
   const readStream: Readable = drive.createReadStream(key)
-  const writeStream = createWriteStream(filePath)
+  const writeStream = createWriteStream(partPath)
   let fileSize = 0
 
-  await new Promise<void>((resolve, reject) => {
-    let settled = false
+  try {
+    await new Promise<void>((resolve, reject) => {
+      let settled = false
 
-    const finish = (err?: Error) => {
-      if (settled) {
-        return
-      }
-      settled = true
-      watchdog.clear()
+      const finish = (err?: Error) => {
+        if (settled) {
+          return
+        }
+        settled = true
+        watchdog.clear()
 
-      if (err) {
-        readStream.destroy()
-        writeStream.destroy()
-        reject(err)
-      } else {
-        resolve()
-      }
-    }
-
-    const watchdog = createWatchdog(STALL_TIMEOUT_MS, () => {
-      finish(new FileStallError(
-        `stalled: no data for ${STALL_TIMEOUT_MS / 1000}s (peer may have disconnected)`,
-        { file: key, timeoutMs: STALL_TIMEOUT_MS }
-      ))
-    })
-
-    opts.registerAborter(() => finish(cancelledError()))
-
-    readStream.on('data', (chunk: Buffer) => {
-      // Mid-file: without this, cancelling a multi-GB file streamed all of
-      // it to disk before stopping.
-      if (opts.isCancelled()) {
-        finish(cancelledError())
-        return
+        if (err) {
+          readStream.destroy()
+          writeStream.destroy()
+          reject(err)
+        } else {
+          resolve()
+        }
       }
 
-      fileSize += chunk.length
+      const watchdog = createWatchdog(STALL_TIMEOUT_MS, () => {
+        finish(new FileStallError(
+          `stalled: no data for ${STALL_TIMEOUT_MS / 1000}s (peer may have disconnected)`,
+          { file: key, timeoutMs: STALL_TIMEOUT_MS }
+        ))
+      })
+
+      opts.registerAborter(() => finish(cancelledError()))
+
+      readStream.on('data', (chunk: Buffer) => {
+        // Mid-file: without this, cancelling a multi-GB file streamed all of
+        // it to disk before stopping.
+        if (opts.isCancelled()) {
+          finish(cancelledError())
+          return
+        }
+
+        fileSize += chunk.length
+        opts.onChunk?.(chunk.length)
+        watchdog.arm()
+      })
+
+      readStream.on('error', (e) => finish(e))
+      writeStream.on('error', (e) => finish(e))
+      // 'close', not 'finish': the data is on disk once the descriptor closed.
+      writeStream.on('close', () => finish())
+
+      readStream.pipe(writeStream)
+
+      // Armed right away, in case no data ever arrives.
       watchdog.arm()
     })
+  } catch (err) {
+    await removePartialFile(partPath)
+    throw err
+  }
 
-    readStream.on('error', (e) => finish(e))
-    writeStream.on('error', (e) => finish(e))
-    writeStream.on('finish', () => finish())
-
-    readStream.pipe(writeStream)
-
-    // Armed right away, in case no data ever arrives.
-    watchdog.arm()
-  })
+  // Promote the complete partial onto its real name (replacing a previous
+  // copy from an earlier attempt, if the resume is rewriting it).
+  try {
+    await fs.rename(partPath, filePath)
+  } catch (err) {
+    await removePartialFile(partPath)
+    throw err
+  }
 
   return fileSize
 }
 
 /**
- * Delete a partially written file. The write stream closes asynchronously,
+ * Delete a partial (`.part`) file. The write stream closes asynchronously,
  * and Windows refuses to delete an open file (EBUSY), so retry for ~600 ms.
  */
-async function removePartialFile(filePath: string): Promise<void> {
+async function removePartialFile(partPath: string): Promise<void> {
   const attempts = 5
 
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
-      await fs.rm(filePath, { force: true })
-      console.log('[Downloader] Removed partial file on cancel:', filePath)
+      await fs.rm(partPath, { force: true })
+      console.log('[Downloader] Removed partial file:', partPath)
       return
     } catch (err) {
       const isLastAttempt = attempt === attempts - 1
       if (isLastAttempt) {
-        console.warn('[Downloader] Could not remove partial:', filePath, (err as Error).message)
+        console.warn('[Downloader] Could not remove partial:', partPath, (err as Error).message)
         return
       }
       await new Promise((r) => setTimeout(r, 120))

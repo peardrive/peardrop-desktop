@@ -144,3 +144,59 @@
     stroke-dashoffset: 100;
   }
 }
+
+/* Settings → Size: the slider lifting off the page while it is in use. */
+@keyframes pd-lift {
+  from {
+    transform: translateY(3px) scale(0.985);
+    box-shadow: 0 0 0 rgb(0 0 0 / 0);
+    opacity: 0.6;
+  }
+}
+
+/*
+ * The divider between the sidebar and the page. It lives in the dark gap
+ * between them (the page's 16px left padding), never on either side: the
+ * grab area fills exactly that gap, and the accent line lights up in its
+ * centre over the middle two-thirds of the height on hover and while dragging.
+ *
+ * Positioned against the sidebar's padding box, which ends at its 2px right
+ * border: -18px = the border (2px) + the gap (16px).
+ */
+.pd-gutter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -18px;
+  width: 16px;
+  cursor: col-resize;
+  z-index: 30;
+}
+.pd-gutter::after {
+  content: '';
+  position: absolute;
+  top: 16.667%;
+  bottom: 16.667%;
+  left: 7px;
+  width: 2px;
+  border-radius: 2px;
+  background: rgb(var(--pd-accent));
+  box-shadow: 0 0 8px rgb(var(--pd-accent) / 0.55);
+  opacity: 0;
+  transition: opacity 0.12s 0.08s;
+}
+.pd-gutter:hover::after,
+.pd-gutter[data-active]::after {
+  opacity: 0.9;
+  transition-delay: 0s;
+}
+html[data-col-drag],
+html[data-col-drag] * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+html[data-col-drag] img,
+html[data-col-drag] video,
+html[data-col-drag] iframe {
+  pointer-events: none;
+}

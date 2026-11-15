@@ -49,7 +49,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Vitest 5 needs Node 22.12 or later.
+          node-version: 22
           cache: npm
 
       # postinstall downloads the Electron binary; npm ci keeps it reproducible.
@@ -61,7 +62,9 @@ jobs:
         run: npm run check
 
       - name: Build installers
-        run: npm run ${{ matrix.script }}
+        # --publish never: on CI electron-builder 26 tries to upload by itself and fails
+        # without a token. The release job below does the uploading.
+        run: npm run ${{ matrix.script }} -- --publish never
         env:
           # Nothing is code-signed. Without this electron-builder can go
           # looking for a certificate and fail instead of skipping.

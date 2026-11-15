@@ -15,13 +15,23 @@ export const identity: AppIdentity = config
  * Absolute path of the configured icon.
  * "candidates" makes sure that path works in dev and when packaged. 
 */
-export function resolveIconPath(): string | null {
+export function resolveIconPath(file: string = identity.icon): string | null {
   const candidates = [
-    path.join(app.getAppPath(), identity.icon), 
-    path.join(process.cwd(), identity.icon)
+    path.join(app.getAppPath(), file),
+    path.join(process.cwd(), file)
   ]
 
   return candidates.find((p) => fs.existsSync(p)) ?? null
+}
+
+/**
+ * macOS ignores BrowserWindow's `icon`; the Dock shows the bundle's icon. A packaged build has ours,
+ * but `npm run dev` runs inside Electron.app, so set the Dock icon by hand there.
+ */
+export function applyDevDockIcon(): void {
+  if (process.platform !== 'darwin' || app.isPackaged) return
+  const iconPath = resolveIconPath(config.macIcon)
+  if (iconPath) app.dock?.setIcon(iconPath)
 }
 
 /**
