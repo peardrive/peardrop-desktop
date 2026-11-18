@@ -50,9 +50,9 @@ Installers for every platform are on the **[Releases page](https://github.com/pe
 | | `PearDrop-<version>-linux-<arch>.deb` | `sudo apt install ./PearDrop-*.deb` |
 
 > [!NOTE]
-> Release builds aren't code-signed yet, so your OS may warn you the first time you open one.
-> - **Windows SmartScreen:** click *More info → Run anyway*.
-> - **macOS Gatekeeper:** right-click the app and choose *Open*. If macOS says the app is damaged, run `xattr -dr com.apple.quarantine /Applications/PearDrop.app`.
+> The macOS builds are signed by Peardrive LLC and notarized by Apple, so they open without a warning.
+> The Windows and Linux builds aren't code-signed yet.
+> - **Windows SmartScreen:** the first time, Windows says it protected your PC. Click *More info → Run anyway*.
 
 Once it opens, PearDrop connects to the public Hyperswarm DHT by itself. You don't need to set anything up.
 
