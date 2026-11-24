@@ -17,6 +17,7 @@ import type {
   DownloadResult,
   DriveRecord,
   DuplicateCheckResult,
+  LinkPreview,
   LibrarySnapshot,
   OpenResult,
   ShareRequest,
@@ -68,6 +69,8 @@ export interface IpcInvokeMap {
   'transfers:share': { args: [ShareRequest]; result: ShareResult }
   'transfers:cancel-share': { args: [driveId: string]; result: SimpleResult }
   'transfers:check-link': { args: [link: string]; result: DuplicateCheckResult }
+  'transfers:preview': { args: [link: string]; result: LinkPreview }
+  'transfers:cancel-preview': { args: [link: string]; result: void }
   'transfers:open': { args: [link: string, opts?: { force?: boolean }]; result: OpenResult }
   'transfers:download': { args: [DownloadRequest]; result: DownloadResult }
   'transfers:cancel-download': { args: [driveId: string]; result: SimpleResult }
@@ -146,6 +149,8 @@ export interface PeardropApi {
     share(req: ShareRequest): Promise<ShareResult>
     cancelShare(driveId: string): Promise<SimpleResult>
     checkLink(link: string): Promise<DuplicateCheckResult>
+    preview(link: string): Promise<LinkPreview>
+    cancelPreview(link: string): Promise<void>
     open(link: string, opts?: { force?: boolean }): Promise<OpenResult>
     download(req: DownloadRequest): Promise<DownloadResult>
     cancelDownload(driveId: string): Promise<SimpleResult>

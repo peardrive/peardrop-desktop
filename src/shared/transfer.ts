@@ -71,6 +71,25 @@ export type DuplicateCheckResult =
   | { isDuplicate: false }
   | { isDuplicate: true; driveId: string; localStatus: 'available' | 'missing'; existing: DriveRecord }
 
+/**
+ * What a link shows before anything is downloaded. The details live in the
+ * share, not the link, so they need the sender online ('offline' otherwise).
+ */
+export type LinkPreview =
+  | {
+      status: 'found'
+      name: string | null
+      /** The first files only (see `totalFiles`). */
+      files: DriveFile[]
+      totalFiles: number
+      totalBytes: number
+      /** When the sender created the share, if its manifest says. */
+      createdAt: number | null
+    }
+  | { status: 'offline' }
+  | { status: 'invalid' }
+  | { status: 'cancelled' }
+
 export interface OpenedDrive {
   driveId: string
   files: DriveFile[]

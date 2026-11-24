@@ -11,6 +11,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { describeInvalidLink, extractShareLink } from '@shared/links'
+import type { LinkPreview } from '@shared/transfer'
 import { highlightDrive, startDownload } from '../../controllers/receive'
 import { cn } from '../../lib/cn'
 import { pickAndDecodeQr } from '../../lib/qr-decode'
@@ -21,6 +22,7 @@ import { Button } from '../../components/ui/Button'
 import { Icon } from '../../components/ui/Icon'
 import { Modal } from '../../components/ui/Modal'
 import { TextField } from '../../components/ui/TextField'
+import { LinkPreviewCard } from './LinkPreviewCard'
 
 type FieldState =
   | { kind: 'empty' }
@@ -39,18 +41,29 @@ export function ReceiveModal({ onClose, isTop }: { onClose: () => void; isTop: b
   const [state, setState] = useState<FieldState>({ kind: 'empty' })
   const inputRef = useRef<HTMLInputElement>(null)
   const checkToken = useRef(0)
+  /** What the link holds: null while the sender is being looked up. */
+  const [preview, setPreview] = useState<LinkPreview | null>(null)
 
   // Validate on every edit; check for duplicates (own share / already
-  // downloaded) shortly after a valid link appears.
+  // downloaded) shortly after a valid link appears, then preview a new one.
   useEffect(() => {
     const next = evaluate(value)
     setState(next)
+    setPreview(null)
     const token = ++checkToken.current
     if (next.kind !== 'valid') return
+    let previewing = false
     const t = setTimeout(async () => {
       try {
         const res = await api().transfers.checkLink(next.link)
-        if (token !== checkToken.current || !res.isDuplicate) return
+        if (token !== checkToken.current) return
+        if (!res.isDuplicate) {
+          previewing = true
+          const p = await api().transfers.preview(next.link)
+          previewing = false
+          if (token === checkToken.current && p.status !== 'cancelled') setPreview(p)
+          return
+        }
         setState({
           kind: 'existing',
           link: next.link,
@@ -63,9 +76,14 @@ export function ReceiveModal({ onClose, isTop }: { onClose: () => void; isTop: b
         })
       } catch {
         /* check unavailable — download path re-checks anyway */
+        if (token === checkToken.current) setPreview({ status: 'offline' })
       }
     }, 200)
-    return () => clearTimeout(t)
+    return () => {
+      clearTimeout(t)
+      // Edited away or modal closed: stop looking for that sender.
+      if (previewing) void api().transfers.cancelPreview(next.link).catch(() => undefined)
+    }
   }, [value])
 
   const download = (link: string) => {
@@ -106,7 +124,7 @@ export function ReceiveModal({ onClose, isTop }: { onClose: () => void; isTop: b
   const label = { empty: 'Paste', valid: 'Download', existing: 'Show in list', invalid: 'Clear' }[state.kind]
   const hint =
     state.kind === 'valid'
-      ? { text: 'Press Enter to download — if the sender is offline, PearDrop keeps trying', cls: 'text-success' }
+      ? { text: 'Valid link. Press Enter to download', cls: 'text-success' }
       : state.kind === 'existing'
         ? { text: state.message, cls: 'text-warning' }
         : state.kind === 'invalid'
@@ -141,33 +159,41 @@ export function ReceiveModal({ onClose, isTop }: { onClose: () => void; isTop: b
         </div>
       </div>
 
-      <div className="my-4 flex items-center gap-3 text-[11px] font-bold uppercase tracking-wider text-subtle">
-        <span className="h-px flex-1 bg-fg/10" /> or <span className="h-px flex-1 bg-fg/10" />
-      </div>
-
-      <button
-        type="button"
-        onClick={() => useUiStore.getState().openModal({ type: 'qr-scanner', onResult: (t) => fromQr(t, 'QR code') })}
-        className="group flex min-h-[180px] flex-1 flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-fg/15 bg-fg/[0.03] text-muted transition-colors hover:border-accent/50 hover:bg-accent/[0.06] hover:text-fg"
-      >
-        <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-fg/10 transition-colors group-hover:bg-accent/15 group-hover:text-accent-strong">
-          <Icon name="qr" className="h-8 w-8" />
-        </span>
-        <span className="text-[13px] font-bold text-fg">QR Code Scan</span>
-        <span className="text-[12px]">Use your camera to scan a PearDrop QR code</span>
-      </button>
-
-      <Button
-        variant="ghost"
-        className="mx-auto mt-3"
-        leading={<Icon name="image" />}
-        onClick={async () => {
-          const { text, cancelled } = await pickAndDecodeQr()
-          if (!cancelled) fromQr(text, 'image')
-        }}
-      >
-        Import QR code image
-      </Button>
+      {state.kind === 'valid' ? (
+        <div className="mt-2 flex min-h-0 flex-1 flex-col">
+          <LinkPreviewCard preview={preview} />
+        </div>
+      ) : (
+        <>
+          <div className="my-4 flex items-center gap-3 text-[11px] font-bold uppercase tracking-wider text-subtle">
+            <span className="h-px flex-1 bg-fg/10" /> or <span className="h-px flex-1 bg-fg/10" />
+          </div>
+    
+          <button
+            type="button"
+            onClick={() => useUiStore.getState().openModal({ type: 'qr-scanner', onResult: (t) => fromQr(t, 'QR code') })}
+            className="group flex min-h-[180px] flex-1 flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-fg/15 bg-fg/[0.03] text-muted transition-colors hover:border-accent/50 hover:bg-accent/[0.06] hover:text-fg"
+          >
+            <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-fg/10 transition-colors group-hover:bg-accent/15 group-hover:text-accent-strong">
+              <Icon name="qr" className="h-8 w-8" />
+            </span>
+            <span className="text-[13px] font-bold text-fg">QR Code Scan</span>
+            <span className="text-[12px]">Use your camera to scan a PearDrop QR code</span>
+          </button>
+    
+          <Button
+            variant="ghost"
+            className="mx-auto mt-3"
+            leading={<Icon name="image" />}
+            onClick={async () => {
+              const { text, cancelled } = await pickAndDecodeQr()
+              if (!cancelled) fromQr(text, 'image')
+            }}
+          >
+            Import QR code image
+          </Button>
+        </>
+      )}
     </Modal>
   )
 }

@@ -148,6 +148,19 @@ export function createMockClient(): PeardropApi {
         const found = [...drives.values()].find((d) => d.shareLink === l)
         return found ? { isDuplicate: true, driveId: found.id, localStatus: 'available', existing: found } : { isDuplicate: false }
       },
+      async preview(l) {
+        await delay(1500)
+        // A link ending in 0 plays an offline sender, so both states can be seen.
+        if (l.endsWith('0')) return { status: 'offline' }
+        const files = [
+          { name: 'holiday-2026.mp4', size: 1_840_000_000 },
+          { name: 'beach.jpg', size: 4_200_000 },
+          { name: 'notes.pdf', size: 380_000 },
+          { name: 'itinerary.docx', size: 92_000 }
+        ]
+        return { status: 'found', name: 'Holiday', files, totalFiles: files.length, totalBytes: files.reduce((s, f) => s + f.size, 0), createdAt: Date.now() - 3_600_000 }
+      },
+      cancelPreview: async () => undefined,
       async open(l) {
         await delay(1200)
         const driveId = `recv_${Date.now()}`

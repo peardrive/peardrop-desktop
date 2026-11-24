@@ -68,6 +68,8 @@ export function registerIpc(d: IpcDeps): void {
   )
   handle('transfers:cancel-share', (id) => withEngine((b) => ({ success: b.cancelShare(id) })), log)
   handle('transfers:check-link', (link) => withEngine((b) => b.checkLink(link)), log)
+  handle('transfers:preview', (link) => withEngine((b) => b.preview(link)), log)
+  handle('transfers:cancel-preview', (link) => withEngine((b) => b.cancelPreview(link)), log)
   handle('transfers:open', (link, opts) => withEngine((b) => b.open(link, opts)), log)
   handle('transfers:download', (req) => withEngine((b) => b.download(req)), log)
   handle('transfers:cancel-download', (id) => withEngine((b) => b.cancelDownload(id)), log)

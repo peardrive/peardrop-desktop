@@ -133,7 +133,7 @@ const DriveTile = memo(function DriveTile({ drive, fileCount, highlighted }: { d
         <DriveRowActions drive={drive} exclude={['open']} onAction={(a) => runRowAction(a, drive)} className="mt-1" />
       </div>
 
-      {pending && <DeleteCountdown pending={pending} onUndo={() => cancelRemoval(drive.id)} />}
+      {pending && <DeleteCountdown stacked pending={pending} onUndo={() => cancelRemoval(drive.id)} />}
       {!pending && cancelling && <CancellingOverlay />}
     </div>
   )

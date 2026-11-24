@@ -28,6 +28,7 @@ import type {
   DriveState,
   DuplicateCheckResult,
   LibrarySnapshot,
+  LinkPreview,
   OpenResult,
   SimpleResult,
   TransferEvent
@@ -47,6 +48,7 @@ import { sweepPartialFiles } from '../file-utils'
 import { downloadFromDrive } from './downloader'
 import { HyperdriveManager } from './manager'
 import { NetworkProbe } from './network-probe'
+import { previewShare } from './preview'
 import { LINK_SCHEME } from './share-link'
 import {
   DriveState as EngineDriveState,
@@ -61,6 +63,8 @@ import {
 const STALE_DOWNLOAD_MS = 5 * 60 * 1000
 /** A cancel must always resolve, even if the engine is stuck. */
 const CANCEL_SAFETY_NET_MS = 4000
+/** A link preview lists this many files; the rest is a count. */
+const PREVIEW_FILES = 50
 
 
 /** Manifest file names arrive as "/a.txt"; the UI wants "a.txt" and keeps the key. */
@@ -119,6 +123,9 @@ export class HyperdriveBackend implements TransferBackend {
   /** Pings the bootstrap servers, for the "reachable" network state. */
   private probe: NetworkProbe | null = null
 
+  /** Link previews in flight, by drive key. */
+  private readonly previews = new Map<string, AbortController>()
+
   constructor(private readonly ctx: BackendContext) {
     this.log = ctx.log.child('hyperdrive')
     this.manager = this.createManager()
@@ -169,6 +176,9 @@ export class HyperdriveBackend implements TransferBackend {
       opts.onProgress?.({ done, total })
     }
     opts.onProgress?.({ done, total })
+
+    for (const preview of this.previews.values()) preview.abort()
+    this.previews.clear()
 
     for (const abort of this.downloadAborters.values()) {
       try {
@@ -387,6 +397,42 @@ export class HyperdriveBackend implements TransferBackend {
       localStatus: localAvailable ? 'available' : 'missing',
       existing: toRecord(existing)
     }
+  }
+
+  async preview(link: string): Promise<LinkPreview> {
+    const key = keyFromLink(link)
+    this.previews.get(key)?.abort()
+    const controller = new AbortController()
+    this.previews.set(key, controller)
+    try {
+      const out = await previewShare({ link, createSwarm: () => this.manager.createSwarm(), signal: controller.signal })
+      if (out.status !== 'found') return out
+      const { contents } = out
+      // Everything below came from a remote peer: coerce before the UI formats it.
+      const bytes = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0)
+      const files = contents.files.map(toDriveFile).map((f) => ({ ...f, name: String(f.name), size: bytes(f.size) }))
+      const created = Number(contents.manifest?.created)
+      return {
+        status: 'found',
+        name: typeof contents.shareName === 'string' ? contents.shareName : null,
+        files: files.slice(0, PREVIEW_FILES),
+        // Counted from the list, not the peer's own totalFiles claim.
+        totalFiles: contents.truncated?.available ?? files.length,
+        totalBytes: bytes(contents.totalBytes) || files.reduce((sum, f) => sum + f.size, 0),
+        createdAt: Number.isFinite(created) && created > 0 ? created : null
+      }
+    } catch (error) {
+      this.log.warn('Link preview failed', { error: (error as Error).message })
+      return { status: 'offline' }
+    } finally {
+      if (this.previews.get(key) === controller) this.previews.delete(key)
+    }
+  }
+
+  cancelPreview(link: string): void {
+    const key = keyFromLink(link)
+    this.previews.get(key)?.abort()
+    this.previews.delete(key)
   }
 
   async open(link: string, opts: { force?: boolean } = {}): Promise<OpenResult> {

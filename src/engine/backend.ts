@@ -19,6 +19,7 @@ import type {
   DriveRecord,
   DuplicateCheckResult,
   LibrarySnapshot,
+  LinkPreview,
   OpenResult,
   SimpleResult,
   TransferEvent
@@ -101,6 +102,13 @@ export interface TransferBackend {
   cancelShare(driveId: string): boolean
 
   checkLink(link: string): Promise<DuplicateCheckResult>
+  /**
+   * Read a link's name and file list without downloading or persisting
+   * anything. A newer preview of the same link, or cancelPreview, ends an
+   * earlier one with 'cancelled'.
+   */
+  preview(link: string): Promise<LinkPreview>
+  cancelPreview(link: string): void
   open(link: string, opts?: { force?: boolean }): Promise<OpenResult>
   download(req: DownloadRequest): Promise<DownloadResult>
   cancelDownload(driveId: string): Promise<SimpleResult>
