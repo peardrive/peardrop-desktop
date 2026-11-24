@@ -309,7 +309,7 @@ export function createMockClient(): PeardropApi {
           icon: '',
           linkScheme: 'peardrop'
         },
-        version: '0.29.0',
+        version: '0.31.0',
         platform: 'win32',
         arch: 'x64',
         // ?frame=mac previews the Mac window chrome in the browser.

@@ -1,7 +1,7 @@
 {
   "name": "peardrop",
   "productName": "PearDrop",
-  "version": "0.30.0",
+  "version": "0.31.0",
   "description": "Simple, elegant P2P file sharing",
   "license": "MIT",
   "author": "Anjou",
