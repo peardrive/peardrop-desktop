@@ -1,0 +1,61 @@
+name: Feature request
+description: New behaviour or capability for the app
+title: "feat: "
+labels: ["type: feature", "status: triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem first, then the shape you'd like the app to take.
+        Every change starts as an issue marked `status: ready` and lands on `develop` through a PR.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: The situation you're in and what's missing or awkward today.
+      placeholder: I want to keep sharing a folder after I move it to another drive, but the share loses track of it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: What the app should do, where it lives in the UI, and what changes for the user. Exact wording helps.
+      placeholder: |
+        Settings → Shares gets a "Relink folder" action. Choosing the new path keeps the sharelink
+        and drive key, and the share goes back to "Sharing" without asking the receiver for a new link.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you tried, or other shapes that could work.
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: User impact
+      options:
+        - Additive (new feature or option)
+        - Behaviour change to something existing
+        - Breaking change
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Area
+      options:
+        - label: Window / navigation
+        - label: Shares and transfers
+        - label: Receive, links and QR scanning
+        - label: Settings and network
+        - label: Tray / menu bar
+        - label: Themes and visual design
+        - label: Transfer engine
+        - label: Docs
