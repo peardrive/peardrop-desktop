@@ -1,30 +1,34 @@
-# Build installers for Windows and Linux and attach them to a GitHub Release.
-#
-# Each platform builds on its own runner, because electron-builder can only
-# produce Linux targets on Linux/macOS and these are native-dependency builds
-# (corestore, hyperdht and friends) — cross-compiling them is not worth it.
-#
-# macOS is deliberately absent: it needs a real Mac runner, and the mac block
-# in electron-builder.config.cjs sets notarize: true, which fails the job
-# without a paid Apple Developer account. Add a `macos-latest` entry and the
-# Apple secrets when that account exists.
-#
-# To cut a release:
-#   npm version minor   # bumps package.json and tags
-#   git push --follow-tags
-# Or run it by hand from the Actions tab to get artifacts without a release.
 name: Release
 
+# Every push to main is a release (a merged release PR, a hotfix, or develop
+# fast-forwarded into main). The installers are built for Windows and Linux,
+# then the commit is tagged v<package.json version> and a GitHub Release is
+# published with the installers attached and notes taken from CHANGELOG.md.
+#
+# Nothing is tagged or published if the build or its verification fails.
+#
+# A manual run only builds the installers. Tick `publish` to also tag and
+# release; manual publishing is allowed from main only.
 on:
   push:
-    tags: ['v*']
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Tag this commit and publish a GitHub Release
+        type: boolean
+        default: false
 
 permissions:
-  contents: write # needed to create the release and upload assets
+  contents: write # tags, releases and uploaded assets
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   build:
+    name: build (${{ matrix.os }})
     strategy:
       # One platform failing should still leave the other's installers.
       fail-fast: false
@@ -41,16 +45,20 @@ jobs:
             artifacts: |
               dist/*.AppImage
               dist/*.deb
-
+              dist/latest-linux.yml
+        # macOS is deliberately absent: it needs a macOS runner and the Apple
+        # signing/notarization secrets, and electron-builder.config.cjs sets
+        # notarize: true. Add a macos-latest entry (build:mac) and the secrets
+        # when that account is available.
     runs-on: ${{ matrix.os }}
-
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           # Vitest 5 needs Node 22.12 or later.
-          node-version: 22
+          node-version: '22.x'
           cache: npm
 
       # postinstall downloads the Electron binary; npm ci keeps it reproducible.
@@ -58,8 +66,8 @@ jobs:
         run: npm ci
 
       # Build what is verified, not what merely compiles.
-      - name: Typecheck and test
-        run: npm run check
+      - name: Verify
+        run: npm run verify
 
       - name: Build installers
         # --publish never: on CI electron-builder 26 tries to upload by itself and fails
@@ -73,23 +81,99 @@ jobs:
       - name: Upload build output
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.os }}
+          name: installers-${{ matrix.os }}
           path: ${{ matrix.artifacts }}
           if-no-files-found: error
 
   release:
-    # Only a tag publishes; a manual run just leaves artifacts on the run.
-    if: startsWith(github.ref, 'refs/tags/v')
+    name: release
     needs: build
+    # Only a push to main, or a manual run from main with `publish` ticked,
+    # creates a tag and a release.
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || inputs.publish == true)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download installers
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Publish release
+      - name: Read version
+        id: v
+        run: |
+          version=$(node -p "require('./package.json').version")
+          {
+            echo "version=$version"
+            echo "tag=v$version"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing $version"
+
+      # A tag that already points elsewhere means the version was not bumped.
+      # Failing is safer than moving a published tag.
+      - name: Check tag
+        run: |
+          tag="${{ steps.v.outputs.tag }}"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            if [ "$(git rev-list -n1 "$tag")" = "$GITHUB_SHA" ]; then
+              echo "$tag already points at this commit; re-publishing its assets."
+              exit 0
+            fi
+            echo "::error::$tag already exists on another commit. Bump the version (npm run release:prepare) and push again."
+            exit 1
+          fi
+
+      - name: Extract release notes
+        run: |
+          awk -v v="${{ steps.v.outputs.version }}" '
+            $0 ~ "^## "v"([[:space:]]|$)" { on=1; next }
+            on && /^## / { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then echo "PearDrop ${{ steps.v.outputs.tag }}" > notes.md; fi
+
+          # Quoted delimiter: the backticks and $ in the body are literal markdown.
+          cat >> notes.md <<'EOF'
+
+          ## Download
+
+          | Platform | File |
+          | --- | --- |
+          | **Windows** (x64) | `PearDrop-${{ steps.v.outputs.version }}-win-x64.exe` (installer) |
+          | | `PearDrop-${{ steps.v.outputs.version }}-portable.exe` |
+          | **Linux** | `PearDrop-${{ steps.v.outputs.version }}-linux-<arch>.AppImage` |
+          | | `PearDrop-${{ steps.v.outputs.version }}-linux-<arch>.deb` |
+
+          See the [README](https://github.com/${{ github.repository }}#-download-and-run) for install notes,
+          including the Windows SmartScreen prompt on unsigned builds.
+          EOF
+          cat notes.md
+
+      - name: Tag
+        run: |
+          tag="${{ steps.v.outputs.tag }}"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "$tag already exists; not moving it."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "PearDrop $tag"
+          git push origin "$tag"
+
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          draft: true # check the assets, then publish by hand
-          generate_release_notes: true
+          tag_name: ${{ steps.v.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: PearDrop ${{ steps.v.outputs.tag }}
+          body_path: notes.md
+          draft: false
+          prerelease: ${{ contains(steps.v.outputs.version, '-') }}
           files: artifacts/**/*

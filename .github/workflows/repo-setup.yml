@@ -1,0 +1,35 @@
+name: Repo setup (labels)
+
+# Run once from the Actions tab ("Run workflow") to create or update the issue labels.
+# Safe to re-run.
+on:
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  labels:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Create labels
+        run: |
+          label() { gh label create "$1" --color "$2" --description "$3" --force; }
+          label "type: feature"     "1D76DB" "New behaviour or capability"
+          label "type: bug"         "D73A4A" "Something behaves incorrectly"
+          label "type: docs"        "0075CA" "README, guides and in-app help"
+          label "type: engine"      "5319E7" "Transfer engine: Hyperdrive, DHT, syncing"
+          label "type: ui"          "C5DEF5" "Renderer, themes and layout"
+          label "type: chore"       "EDEDED" "Tooling, CI, dependencies"
+          label "status: triage"    "FBCA04" "Needs a decision before work starts"
+          label "status: ready"     "0E8A16" "Agreed and ready to pick up"
+          label "status: in progress" "5319E7" "Someone is working on it"
+          label "breaking"          "B60205" "Changes user-visible behaviour; needs a minor bump while on 0.x"
+          label "platform: windows" "BFD4F2" "Windows-specific"
+          label "platform: macos"   "BFDADC" "macOS-specific"
+          label "platform: linux"   "D4C5F9" "Linux / X11 / Wayland specific"
+          label "no-changeset"      "EDEDED" "PR does not need a changelog entry"
+          label "release"           "0E8A16" "Release pull request"

@@ -109,10 +109,13 @@ Output goes to `dist/`. Each command first compiles the main, preload and render
 ### Checks
 
 ```bash
+npm run verify      # everything CI runs: Pearkit check, typecheck, tests and build
 npm run typecheck   # TypeScript, main + renderer
 npm test            # vitest (includes an engine round-trip test)
-npm run check       # both
+npm run check       # typecheck + tests only
 ```
+
+Run `npm run verify` once before opening a pull request; CI runs the same command.
 
 ### App identity
 
@@ -270,7 +273,7 @@ Built with Electron, electron-vite, React, TypeScript, Tailwind CSS and Zustand 
 
 ## 🤝 Contributing
 
-Bug reports and pull requests are welcome. Before opening a PR, run `npm run check`. For networking changes, also test with the [two-peer local setup](#two-peers-on-one-machine).
+Bug reports and pull requests are welcome. Work targets `develop` and needs a changeset (`npx changeset`); before opening a PR, run `npm run verify`. For networking changes, also test with the [two-peer local setup](#two-peers-on-one-machine). The branch, release and changelog flow is described in [RELEASING.md](RELEASING.md).
 
 ## ⚖️ License
 

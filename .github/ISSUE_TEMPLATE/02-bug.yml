@@ -1,0 +1,97 @@
+name: Bug report
+description: Something behaves incorrectly
+title: "fix: "
+labels: ["type: bug", "status: triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Include the exact steps and as much of the output as you can.
+        *Settings → Diagnostics → Copy last 300 lines* is the most useful artifact; the daily
+        log is at `<data root>/logs/peardrop-YYYY-MM-DD.log` (`~/.peardrop` by default).
+
+  - type: input
+    id: version
+    attributes:
+      label: PearDrop version
+      description: From the release tag, the About page, or `node -p "require('./package.json').version"` when running from source.
+      placeholder: 0.31.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      multiple: true
+      options:
+        - Windows 10
+        - Windows 11
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux (X11)
+        - Linux (Wayland)
+        - WSL
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How are you running PearDrop?
+      options:
+        - Windows installer
+        - Windows portable
+        - macOS dmg / zip
+        - Linux AppImage
+        - Linux deb
+        - From source (`npm run dev` / `npm run app`)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: network
+    attributes:
+      label: Network
+      options:
+        - Public DHT
+        - Local bootstrapper (`npm run bootstrap`)
+        - Custom bootstrap node
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start PearDrop with a local bootstrapper
+        2. Share a folder containing an empty file
+        3. Paste the link into the second profile
+        4. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      description: Paste the error, a screenshot, or the relevant log lines. Redact sharelinks and file paths you don't want public.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "Use *Settings → Diagnostics → Copy last 300 lines*, or attach the matching `peardrop-YYYY-MM-DD.log`."
+      render: shell
